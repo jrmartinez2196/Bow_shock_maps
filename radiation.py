@@ -54,27 +54,18 @@ def emissivity_OIII_sr(n, T):
 
 def emissivity_freefree_sr(n, T, Z, nu=2e6*1e9):
     """
-    Eq. 5.14b Rybicky & Lightman 1982
-    [erg s^-1 cm^-3 sr^-1]
+    Free-free emissivity [erg s^-1 cm^-3 sr^-1]
     """
     from gaunt_factor import gaunt_ff_calc
     
     n_arr = np.asarray(n, dtype=float)
     T_arr = np.asarray(T, dtype=float)
-    T_arr = np.clip(T_arr, 1e4, 1e8) # Maybe remove?
+    T_arr = np.clip(T_arr, 1e4, 1e8)
     
-    # Ensure positive values
-    n_arr = np.maximum(n_arr, 0.0)
-    T_arr = np.maximum(T_arr, 1e4)
+    gaunt = gaunt_ff_calc(nu, T_arr, Z)
     
-    gaunt = np.zeros_like(n_arr)
-    for i in range(len(n_arr)):
-        if n_arr[i] > 0 and T_arr[i] > 0:
-            gaunt[i] = gaunt_ff_calc(nu, T_arr[i], Z)
-        else:
-            gaunt[i] = 1.0
-    
-    exp = np.exp(-h * nu / (kB * T_arr))
-    j = (6.8e-38 / (4 * np.pi)) * Z**2 * n_arr**2 * nu * exp * gaunt / np.sqrt(T_arr)
+    # Emissivity calculation
+    exp_factor = np.exp(-h * nu / (kB * T_arr))
+    j = (6.8e-38 / (4 * np.pi)) * Z**2 * n_arr**2 * nu * exp_factor * gaunt / np.sqrt(T_arr)
     
     return j
