@@ -4,12 +4,15 @@ Bow Shock Interactive Visualizer
 run as: python3 bow_shock.py [source_name] [params_dir]
 """
 
+import sys
+import argparse
 import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.widgets import Slider, Button
 from matplotlib.colors import LogNorm
 from scipy.interpolate import interp1d
+from pathlib import Path
 
 from constants import AU, pc, Msun_yr, mu, mp, mu_sh, h, kB
 from params_loader import get_source_params, validate_params
@@ -20,18 +23,11 @@ from bow_shock_surface import (
 )
 from thermodynamics import (
     post_shock_conditions,
-    compute_layer_thickness,
-    normalized_thickness,
     vnorm_forward,
     vnorm_wind,
     vtan,
     cooling_time,
-    advection_time,
-    pre_shock,
-    mach_number,
-    compression_factor_rh,
-    temperature_post_rh,
-    density_post_rh
+    advection_time
 )
 from utils import (
     make_projection_maps_fast,
@@ -39,9 +35,34 @@ from utils import (
     arcsecond
 )
 
+def sanitize_log_data(data):
+    """Ensure data is valid for LogNorm"""
+    data = np.asarray(data)
+    data = np.where(np.isfinite(data), data, 0.0)
+    return np.clip(data, 1e-300, None)
+
+def get_norm(data):
+    data = data[np.isfinite(data) & (data > 0)]
+    
+    if len(data) == 0:
+        return LogNorm(vmin=1e-30, vmax=1e-20)
+    
+    vmax = np.max(data)
+    
+    vmin = vmax / 100.
+    
+    return LogNorm(vmin=vmin, vmax=1.1*vmax)
+
+
+def clip_data(data):
+    """Clip extreme bright pixels to improve contrast"""
+    data = np.asarray(data)
+    pmax = np.percentile(data[np.isfinite(data)], 99.5)
+    return np.clip(data, None, pmax)
+
 
 class BowShock:
-    def __init__(self, source_name='RXJ0528+2838', params_dir='.'):
+    def __init__(self, source_name='RXJ0528+2838', params_dir=None):
         """
         Initialize bow shock model with parameters from file.
         
@@ -49,10 +70,16 @@ class BowShock:
         -----------
         source_name : str
             Name of the source (e.g., 'RXJ0528+2838')
-        params_dir : str
-            Directory containing parameter files
+        params_dir : str or Path
+            Directory containing parameter files (converted to Path internally)
         """
-        print("Loading parameters...")
+        # Convert to Path if string provided
+        if params_dir is None:
+            params_dir = Path.cwd()
+        else:
+            params_dir = Path(params_dir)
+        
+        print(f"Loading parameters from: {params_dir}")
         # Load parameters from file
         self.params = get_source_params(source_name, params_dir)
         validate_params(self.params)
@@ -90,14 +117,27 @@ class BowShock:
         
         # Visualization parameters
         self.zmax = self.params.get('zmax', 5e15)
-        self.nz = self.params.get('nz', 75)
-        self.nx = self.params.get('nx', 50)
-        self.ny = self.params.get('ny', 50)
-        self.xlim_factor = self.params.get('xlim_factor', 5.0)
-        self.ylim_factor = self.params.get('ylim_factor', 5.0)
+        self.nz = self.params.get('nz', 200)
+        self.nx = self.params.get('nx', 250)
+        self.ny = self.params.get('ny', 250)
+        self.xlim_factor = self.params.get('xlim_factor', 10.0)
+        self.ylim_factor = self.params.get('ylim_factor', 10.0)
         
         # Frequency for free-free emission [Hz]
-        self.nu_ff = self.params.get('nu_ff', 2e6 * 1e9)   # 2e6 GHz == 1500 A -> FUV
+        self.continuum_frequencies = {
+            'radio': 1e9,           # 1 GHz - radio
+            'IR': 3e12,             # 3 THz - MIR
+            'optical_R': 4.3e14,    # 700 nm - OP - Red
+            'optical_V': 5.5e14,    # 545 nm - OP - Green
+            'optical_B': 6.9e14,    # 435 nm - OP - Blue
+            'FUV': 2e15,            # 150 nm - FUV
+            'EUV': 3e16,            # 10 nm - Extreme UV
+            'Xray_soft': 3e17,      # 1 keV - Soft X-rays
+            'Xray_hard': 3e18       # 10 keV - Hard X-rays
+        }
+
+        band_name = self.params.get('continuum_band', 'FUV')
+        self.nu_ff = self.continuum_frequencies.get(band_name, self.continuum_frequencies['FUV'])
         
         # Store references to plot objects
         self.fig1 = None
@@ -115,7 +155,7 @@ class BowShock:
         
         # Pre-compute theta grid
         print("Computing theta grid...")
-        self.theta_grid = np.linspace(0.01, np.pi - 0.01, 500)
+        self.theta_grid = np.linspace(0.01, 2.*np.pi/3., 500)
         
         # Load initial R_RS function
         print("Loading R_RS function...")
@@ -124,7 +164,7 @@ class BowShock:
         # Calculate R0 for verification
         R0_test = self.update_R0()
         print(f"R0 = {R0_test/AU:.1f} AU")
-        print(f"Projected stagnation point distance = {arcsecond(R0_test*np.cos(self.inclination*np.pi/180.), self.distance)} ''")
+        #print(f"Projected stagnation point distance = {arcsecond(R0_test*np.cos(self.inclination*np.pi/180.), self.distance)} ''")
         
         print(f"Loaded parameters for {source_name}")
         print(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
@@ -134,6 +174,21 @@ class BowShock:
         print(f"  T_ism = {self.T_ism:.2f} K")
         print(f"  inclination = {self.inclination:.1f} deg")
         print("Initialization complete!")
+
+    def get_continuum_bands(self):
+        """Returns the available frequencies to compute free-free emission"""
+        return list(self.continuum_frequencies.keys())
+
+    def set_continuum_band(self, band_name):
+        """Modifies the frequency"""
+        if band_name in self.continuum_frequencies:
+            self.nu_ff = self.continuum_frequencies[band_name]
+            print(f"Continuum band changed to {band_name} ({self.nu_ff:.2e} Hz)")
+            if hasattr(self, 'fig2') and self.fig2 is not None:
+                self.update_figure2()
+        else:
+            available = ', '.join(self.get_continuum_bands())
+            raise ValueError(f"Unknown band: {band_name}. Available: {available}")
     
     def update_lam_from_T_ism(self):
         """
@@ -157,7 +212,7 @@ class BowShock:
         
         # Lambda = alpha / (1 + alpha)
         self.lam = self.alpha / (1.0 + self.alpha)
-        self.lmb = np.log10(self.lam) if self.lam > 0 else -10
+        self.lmb = np.log10(self.lam)
     
     def update_R0(self):
         """Calculate standoff radius [cm]"""
@@ -165,8 +220,9 @@ class BowShock:
     
     def update_R_RS_func(self):
         """
-        Update the R_RS function using the Christie ODE integration.
-        This matches exactly what the notebook does.
+        Updates the R_RS function using the Christie ODE integration.
+    
+        Produces the bow shock surface
         """
         theta_vals, r_vals = integrate_r_theta_christie(
             self.lam, 
@@ -204,11 +260,39 @@ class BowShock:
         # Update R_RS_func when lam changes
         self.update_R_RS_func()
     
-    def compute_profiles(self):
+    def compute_thermo(self):
+        """
+        Computes the hydro and thermodynamic variables as a function of theta
+        Computes the radiative or adiabatic nature of each shock at each position
+        
+        The calculation accounts for:
+        - Physical standoff distance R0 corrected for thermal pressure (alpha parameter)
+        - Wind density profile n_wind along the shock surface
+        - Post-shock conditions using the post_shock_conditions function
+        - Radiative vs. adiabatic regimes (cold vs. hot components)
+        - Normalized layer thicknesses H/R for hot and cold phases
+        - Perpendicular and tangential velocity components
+        - Cooling-to-advection time ratios to determine shock regime
+        
+        Returns:
+        --------
+        dict: Dictionary containing all computed quantities with keys
+        (_RS-> reverse shock; _FS -> Forward shock)
+            'theta' : Polar angle array [rad]
+            'n_hot', 'n_cold' : densities from the post shock and recombination layers [cm^-3]
+            'T_hot', 'T_cold' : RS temperatures [K]
+            'regime' : Shock regime ('radiative'/'adiabatic')
+            'H_hot', 'H_cold', 'H_RS_total' : normalized thicknesses
+            'v_perp'' : Perpendicular velocities [cm/s]
+            'v_tan' : Tangential velocities [cm/s]
+            'ratio' : Cooling-to-advection time ratios
+        """
         R0_phys = self.update_R0()
         lam = self.lam
-        alpha = lam/(1-lam) if lam < 1 else 0
+        alpha = lam/(1-lam)
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
+
+        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(self.inclination*np.pi/180.), self.distance)} ''")
         
         thr, rr_norm = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=np.pi)
         
@@ -275,11 +359,13 @@ class BowShock:
         """Compute emission maps using vectorized code."""
         R0_phys = self.update_R0()
         lam = self.lam
-        alpha = lam/(1-lam) if lam < 1 else 0
+        alpha = lam/(1-lam)
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
         
-        xlim = self.xlim_factor * R0_corrected
-        ylim = self.ylim_factor * R0_corrected
+        #xlim = self.xlim_factor * R0_corrected
+        #ylim = self.ylim_factor * R0_corrected
+        xlim = 5. * R0_corrected
+        ylim = 5. * R0_corrected
         inclination_rad = np.deg2rad(90 - self.inclination)
         zmax = max(self.zmax, 5 * R0_corrected)
         
@@ -324,7 +410,8 @@ class BowShock:
         ax3 = self.fig1.add_subplot(3, 2, 3)
         ax3.set_xlabel(r'$\theta$ [rad]')
         ax3.set_ylabel(r'H/R')
-        ax3.set_yscale('log')
+        ax3.set_yscale('linear')
+        ax3.set_ylim(1e-1,1.)
         ax3.set_title('Normalized Layer Thickness')
         ax3.grid(True, alpha=0.3)
         
@@ -380,6 +467,8 @@ class BowShock:
     def create_figure2(self):
         self.fig2 = plt.figure(figsize=(15, 12))
         self.fig2.suptitle('Emission Maps and Radial Profiles', fontsize=16)
+        self.star_markers = {'Halpha': None, 'OIII': None, 'ff': None}
+        self.arrows = {'Halpha': None, 'OIII': None, 'ff': None}
         
         # Top row: maps
         ax_Halpha = self.fig2.add_subplot(2, 3, 1)
@@ -440,26 +529,6 @@ class BowShock:
        
         self.fig2.tight_layout()
     
-    def create_figure3(self):
-        """
-        Creates third figure with RGB composite of all three emission maps.
-        Three independent colorbars with correct colormaps (Reds, Greens, Purples).
-        """
-        self.fig3 = plt.figure(figsize=(14, 10))
-        self.fig3.suptitle('Overlaid Emission Maps (RGB Composite)', fontsize=16)
-        
-        # Main axes for the RGB image
-        self.fig3_ax = self.fig3.add_subplot(1, 1, 1)
-        self.fig3_ax.set_xlabel('x [arcsec]')
-        self.fig3_ax.set_ylabel('y [arcsec]')
-        self.fig3_ax.set_title('Hα (Red) + [O III] (Green) + Free-free (Blue)')
-        self.fig3_ax.set_aspect('equal')
-        self.fig3_ax.grid(True, alpha=0.2)
-        
-        self.rgb_image = None
-        self.fig3_colorbars = {}
-        
-        self.fig3.tight_layout()
     
     def create_sliders(self):
         """Create sliders in a separate window"""
@@ -523,7 +592,7 @@ class BowShock:
         self.update_R_RS_func()
     
     def update_figure1(self):
-        prof = self.compute_profiles()
+        prof = self.compute_thermo()
         
         self.lines['fig1']['n_RS_hot'].set_data(prof['theta'], prof['n_RS_hot'])
         self.lines['fig1']['n_RS_cold'].set_data(prof['theta'], prof['n_RS_cold'])
@@ -569,219 +638,158 @@ class BowShock:
         try:
             maps = self.compute_maps()
             
-            extent = [maps['x'][0], maps['x'][-1], maps['y'][0], maps['y'][-1]]
+            # Clean data
+            I_Halpha = sanitize_log_data(maps['I_Halpha'])
+            I_OIII   = sanitize_log_data(maps['I_OIII'])
+            I_ff     = sanitize_log_data(maps['I_ff_total'])
+
+            extent = [
+                np.min(maps['x']), np.max(maps['x']),
+                np.min(maps['y']), np.max(maps['y'])
+            ]
+
+            #Projected values
+            R0_phys = self.update_R0()
+            R0_corrected = R0_phys / np.sqrt(1 + self.alpha)
+
+            inc = np.deg2rad(self.inclination)
+
+            # Location of the stagnation point
+            x0 = 0.0
+            y0 = 0.0
+
+            # Location of the star
+            x_star = 0.0 + arcsecond(R0_corrected * np.cos(inc), self.distance)
+            y_star = 0.0
+
+            R0_arc = arcsecond(R0_corrected, self.distance)
+
+
+            zoom_factor = 3.0
+            dx = zoom_factor * R0_arc
+            dy = zoom_factor * R0_arc
+
+            xmin = x0 - dx
+            xmax = x0 + dx
+            ymin = y0 - dy
+            ymax = y0 + dy
+
+            # Emission maps
+            data_list = [I_Halpha, I_OIII, I_ff]
+            keys = ['Halpha', 'OIII', 'ff']
+            cmaps = ['inferno', 'inferno', 'inferno']
             
-            # Halpha
-            if self.images['Halpha'] is None:
-                self.images['Halpha'] = self.fig2_axes['maps'][0].imshow(
-                    maps['I_Halpha'], origin='lower', extent=extent,
-                    cmap='magma', norm=LogNorm()
-                )
-                self.colorbars['Halpha'] = plt.colorbar(self.images['Halpha'], 
-                                                         ax=self.fig2_axes['maps'][0],
-                                                         label='Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-            else:
-                self.images['Halpha'].set_data(maps['I_Halpha'])
-                self.images['Halpha'].set_extent(extent)
-                if np.any(np.isfinite(maps['I_Halpha'])):
-                    vmin_val = np.nanmin(maps['I_Halpha'])
-                    vmax_val = np.nanmax(maps['I_Halpha'])
-                    if vmin_val < vmax_val:
-                        self.images['Halpha'].set_clim(vmin=vmin_val, vmax=vmax_val)
-            
-            # OIII
-            if self.images['OIII'] is None:
-                self.images['OIII'] = self.fig2_axes['maps'][1].imshow(
-                    maps['I_OIII'], origin='lower', extent=extent,
-                    cmap='magma', norm=LogNorm()
-                )
-                self.colorbars['OIII'] = plt.colorbar(self.images['OIII'],
-                                                       ax=self.fig2_axes['maps'][1],
-                                                       label='Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-            else:
-                self.images['OIII'].set_data(maps['I_OIII'])
-                self.images['OIII'].set_extent(extent)
-                if np.any(np.isfinite(maps['I_OIII'])):
-                    vmin_val = np.nanmin(maps['I_OIII'])
-                    vmax_val = np.nanmax(maps['I_OIII'])
-                    if vmin_val < vmax_val:
-                        self.images['OIII'].set_clim(vmin=vmin_val, vmax=vmax_val)
-            
-            # Free-free total
-            if self.images['ff'] is None:
-                self.images['ff'] = self.fig2_axes['maps'][2].imshow(
-                    maps['I_ff_total'], origin='lower', extent=extent,
-                    cmap='magma', norm=LogNorm()
-                )
-                self.colorbars['ff'] = plt.colorbar(self.images['ff'],
-                                                     ax=self.fig2_axes['maps'][2],
-                                                     label='Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-            else:
-                self.images['ff'].set_data(maps['I_ff_total'])
-                self.images['ff'].set_extent(extent)
-                if np.any(np.isfinite(maps['I_ff_total'])):
-                    vmin_val = np.nanmin(maps['I_ff_total'])
-                    vmax_val = np.nanmax(maps['I_ff_total'])
-                    if vmin_val < vmax_val:
-                        self.images['ff'].set_clim(vmin=vmin_val, vmax=vmax_val)
-            
-            # Radial profiles
-            if np.any(maps['I_Halpha'] > 0):
-                r, prof_Halpha = radial_profile(maps['x'], maps['y'], maps['I_Halpha'],
-                                                 dX=0.0, nbins=33, r_min=0.0, r_max=250.0)
-                _, prof_OIII = radial_profile(maps['x'], maps['y'], maps['I_OIII'],
-                                              dX=0.0, nbins=33, r_min=0.0, r_max=250.0)
-                _, prof_ff = radial_profile(maps['x'], maps['y'], maps['I_ff_total'],
-                                             dX=0.0, nbins=33, r_min=0.0, r_max=250.0)
-               
-                self.profiles['Halpha'].set_data(r, prof_Halpha)
-                self.profiles['OIII'].set_data(r, prof_OIII)
-                self.profiles['ff'].set_data(r, prof_ff)
+            for i, (key, I_data, cmap) in enumerate(zip(keys, data_list, cmaps)):
+                ax = self.fig2_axes['maps'][i]
+                img = self.images[key]
                 
-                for ax, prof in zip(self.fig2_axes['profiles'], 
-                                   [prof_Halpha, prof_OIII, prof_ff]):
+                norm = get_norm(I_data)
+                
+                if img is None:
+                    img_obj = ax.imshow(
+                        I_data,
+                        origin='lower',
+                        extent=extent,
+                        cmap=cmap,
+                        norm=norm
+                    )
+                    
+                    self.images[key] = img_obj
+                    self.colorbars[key] = plt.colorbar(
+                        img_obj,
+                        ax=ax,
+                        label='Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]'
+                    )
+                else:
+                    img.set_data(I_data)
+                    img.set_extent(extent)
+                    img.set_norm(norm)
+
+                # Star
+                if self.star_markers[key] is None:
+                    star, = ax.plot(
+                        x_star, y_star,
+                        marker='*',
+                        color='black',
+                        markersize=10,
+                        zorder=5
+                    )
+                    self.star_markers[key] = star
+                else:
+                    self.star_markers[key].set_data([x_star], [y_star])
+
+                # Arrow towars R0
+                dx_arrow = x0 - x_star
+                dy_arrow = y0 - y_star
+
+                if self.arrows[key] is not None:
+                    self.arrows[key].remove()
+
+                arr = ax.arrow(
+                    x_star, y_star,
+                    dx_arrow, dy_arrow,
+                    color='black',
+                    width=0.0,
+                    head_width=0.05 * R0_arc,
+                    length_includes_head=True,
+                    zorder=5
+                )
+                self.arrows[key] = arr
+
+            # Zoom
+            for ax in self.fig2_axes['maps']:
+                ax.set_xlim(xmin, xmax)
+                ax.set_ylim(ymin, ymax)
+                ax.set_aspect('equal')
+
+            # Radial profiles
+            if np.any(I_Halpha > 0):
+                r_prof, prof_Halpha = radial_profile(
+                    maps['x'], maps['y'], I_Halpha,
+                    dX=0.0, nbins=33, r_min=0.0, r_max=250.0
+                )
+                _, prof_OIII = radial_profile(
+                    maps['x'], maps['y'], I_OIII,
+                    dX=0.0, nbins=33, r_min=0.0, r_max=250.0
+                )
+                _, prof_ff = radial_profile(
+                    maps['x'], maps['y'], I_ff,
+                    dX=0.0, nbins=33, r_min=0.0, r_max=250.0
+                )
+                
+                self.profiles['Halpha'].set_data(r_prof, prof_Halpha)
+                self.profiles['OIII'].set_data(r_prof, prof_OIII)
+                self.profiles['ff'].set_data(r_prof, prof_ff)
+                
+                for ax, prof in zip(
+                    self.fig2_axes['profiles'],
+                    [prof_Halpha, prof_OIII, prof_ff]
+                ):
                     if len(prof) > 0 and np.max(prof) > 0:
                         ax.set_ylim(0, np.max(prof) * 1.1)
                     ax.relim()
                     ax.autoscale_view()
-           
+
         except Exception as e:
             print(f"Error in update_figure2: {e}")
             import traceback
             traceback.print_exc()
-       
-        self.fig2.canvas.draw_idle()
-    
-    def update_figure3(self):
-        """
-        Update the RGB composite figure.
-        Halpha -> Red channel, OIII -> Green channel, Free-free -> Blue channel.
-        Three separate colorbars with correct colormaps (Reds, Greens, Purples).
-        """
-        try:
-            from mpl_toolkits.axes_grid1 import make_axes_locatable
-            import matplotlib as mpl
-            
-            maps = self.compute_maps()
-            
-            extent = [maps['x'][0], maps['x'][-1], maps['y'][0], maps['y'][-1]]
-            
-            def normalize_map_log(img):
-                """Normalize image to [0, 1] using log scaling."""
-                img_finite = img[np.isfinite(img)]
-                if len(img_finite) == 0:
-                    return np.zeros_like(img), 1e-10, 1.0
-                
-                # Use log10 scaling
-                img_pos = img_finite[img_finite > 0]
-                if len(img_pos) == 0:
-                    return np.zeros_like(img), 1e-10, 1.0
-                
-                vmin = np.percentile(img_pos, 1)
-                vmax = np.percentile(img_pos, 99)
-                
-                if vmax <= vmin:
-                    vmax = vmin * 100
-                
-                # Log normalization
-                log_img = np.log10(np.maximum(img, vmin/10))
-                log_vmin = np.log10(vmin)
-                log_vmax = np.log10(vmax)
-                norm_img = (log_img - log_vmin) / (log_vmax - log_vmin)
-                norm_img = np.clip(norm_img, 0, 1)
-                
-                return norm_img, vmin, vmax
-            
-            # Normalize each channel
-            red, vmin_r, vmax_r = normalize_map_log(maps['I_Halpha'])
-            green, vmin_g, vmax_g = normalize_map_log(maps['I_OIII'])
-            blue, vmin_b, vmax_b = normalize_map_log(maps['I_ff_total'])
-            
-            # Store vmin/vmax for colorbars
-            self.channel_limits = {
-                'Halpha': {'vmin': vmin_r, 'vmax': vmax_r},
-                'OIII': {'vmin': vmin_g, 'vmax': vmax_g},
-                'ff': {'vmin': vmin_b, 'vmax': vmax_b}
-            }
-            
-            # Stack into RGB array
-            rgb = np.stack([red, green, blue], axis=-1)
-            
-            # Create or update RGB image
-            if self.rgb_image is None:
-                self.rgb_image = self.fig3_ax.imshow(rgb, origin='lower', extent=extent)
-                
-                # Create three separate colorbar axes using make_axes_locatable
-                divider = make_axes_locatable(self.fig3_ax)
-                
-                # Colorbar 1: Halpha (Reds colormap)
-                ax_cbar_halpha = divider.append_axes("right", size="5%", pad=0.05)
-                norm_halpha = mpl.colors.Normalize(vmin=vmin_r, vmax=vmax_r)
-                sm_halpha = mpl.cm.ScalarMappable(norm=norm_halpha, cmap='Reds')
-                sm_halpha.set_array(maps['I_Halpha'])
-                cbar_halpha = self.fig3.colorbar(sm_halpha, cax=ax_cbar_halpha)
-                cbar_halpha.set_label('Hα Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-                
-                # Colorbar 2: OIII (Greens colormap)
-                ax_cbar_oiii = divider.append_axes("right", size="5%", pad=0.35)
-                norm_oiii = mpl.colors.Normalize(vmin=vmin_g, vmax=vmax_g)
-                sm_oiii = mpl.cm.ScalarMappable(norm=norm_oiii, cmap='Greens')
-                sm_oiii.set_array(maps['I_OIII'])
-                cbar_oiii = self.fig3.colorbar(sm_oiii, cax=ax_cbar_oiii)
-                cbar_oiii.set_label('[O III] Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-                
-                # Colorbar 3: Free-free (Purples colormap)
-                ax_cbar_ff = divider.append_axes("right", size="5%", pad=0.65)
-                norm_ff = mpl.colors.Normalize(vmin=vmin_b, vmax=vmax_b)
-                sm_ff = mpl.cm.ScalarMappable(norm=norm_ff, cmap='Purples')
-                sm_ff.set_array(maps['I_ff_total'])
-                cbar_ff = self.fig3.colorbar(sm_ff, cax=ax_cbar_ff)
-                cbar_ff.set_label('Free-free Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-                
-                self.fig3_colorbars = {
-                    'Halpha': cbar_halpha,
-                    'OIII': cbar_oiii,
-                    'ff': cbar_ff
-                }
-                
-            else:
-                # Update existing RGB image
-                self.rgb_image.set_data(rgb)
-                self.rgb_image.set_extent(extent)
-                
-                # Update colorbars with new limits
-                norm_halpha = mpl.colors.Normalize(vmin=vmin_r, vmax=vmax_r)
-                self.fig3_colorbars['Halpha'].set_norm(norm_halpha)
-                self.fig3_colorbars['Halpha'].set_label('Hα Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-                
-                norm_oiii = mpl.colors.Normalize(vmin=vmin_g, vmax=vmax_g)
-                self.fig3_colorbars['OIII'].set_norm(norm_oiii)
-                self.fig3_colorbars['OIII'].set_label('[O III] Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-                
-                norm_ff = mpl.colors.Normalize(vmin=vmin_b, vmax=vmax_b)
-                self.fig3_colorbars['ff'].set_norm(norm_ff)
-                self.fig3_colorbars['ff'].set_label('Free-free Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-            
-            self.fig3.canvas.draw_idle()
         
-        except Exception as e:
-            print(f"Error in update_figure3: {e}")
-            import traceback
-            traceback.print_exc()
+        self.fig2.canvas.draw_idle()
+        
+    
         
     def update_all(self, val):
         """Update all figures"""
         self.get_params_from_sliders()
         self.update_figure1()
         self.update_figure2()
-        self.update_figure3()
     
     def run(self):
         """Run the application"""
         print("Creating figures...")
         self.create_figure1()
         self.create_figure2()
-        self.create_figure3()
         self.create_sliders()
         
         print("Initial update...")
@@ -793,16 +801,72 @@ class BowShock:
 
 
 if __name__ == "__main__":
-    import sys
+    import argparse
     
-    source_name = 'RXJ0528+2838'
-    params_dir = '.'
+    parser = argparse.ArgumentParser(
+        description='Bow Shock Interactive Visualizer',
+        epilog="""
+E.g.:
+  python3 bow_shock.py
+  python3 bow_shock.py --source RXJ0528+2838
+  python3 bow_shock.py --source RXJ0528+2838 --params-dir ./params_file
+  python3 bow_shock.py --list-bands
+
+Available frequencies:
+  radio, IR, optical_R, optical_V, optical_B, FUV, EUV, Xray_soft, Xray_hard
+        """
+    )
     
-    if len(sys.argv) > 1:
-        source_name = sys.argv[1]
-    if len(sys.argv) > 2:
-        params_dir = sys.argv[2]
+    parser.add_argument(
+        '--source', '-s',
+        type=str,
+        default='RXJ0528+2838',
+        help='Source name (default: RXJ0528+2838)'
+    )
     
-    print(f"Starting with source: {source_name}, params_dir: {params_dir}")
-    app = BowShock(source_name, params_dir)
+    parser.add_argument(
+        '--params-dir', '-p',
+        type=str,
+        default='.',
+        help='Path to parameters file (default: current directory)'
+    )
+    
+    parser.add_argument(
+        '--list-bands', '-l',
+        action='store_true',
+        help='List the available spectrum bands to compute monoenergetic free-free emission'
+    )
+    
+    parser.add_argument(
+        '--band', '-b',
+        type=str,
+        default=None,
+        help='Spectrum band to compute free-free emission (e.g.: FUV, IR, Xray_soft)'
+    )
+    
+    args = parser.parse_args()
+    
+    if args.list_bands:
+        print("Available spectrum bands to calculate free-free:")
+        bands = {
+            'radio': '1 GHz - Radio',
+            'IR': '3 THz - Mid infrared',
+            'optical_R': '700 nm - Opt, red',
+            'optical_V': '545 nm - Opt, green',
+            'optical_B': '435 nm - Opt, blue',
+            'FUV': '150 nm - Far ultraviolet',
+            'EUV': '10 nm - Extreme ultraviolet',
+            'Xray_soft': '1 keV - Soft x-rays',
+            'Xray_hard': '10 keV - Hard x-rays'
+        }
+        for band, desc in bands.items():
+            print(f"  {band:12s} : {desc}")
+        sys.exit(0)
+    
+    print(f"Loading. Source: {args.source}, params_dir: {args.params_dir}")
+    app = BowShock(args.source, args.params_dir)
+    
+    if args.band:
+        app.set_continuum_band(args.band)
+    
     app.run()
