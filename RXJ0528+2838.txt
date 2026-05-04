@@ -1,10 +1,9 @@
 {
 	'Mdot' : 1.e-9,
-	'Vw' : 100.,
+	'Vw' : 1000.,
 	'Vstar' : 128.5,
 	'n_ism' : 0.2,
 	'dist' : 224.2,	
 	'inclination' : 75.,
 	'T_ism' : 8.e3
 }
-#'lmb' : -2.5
