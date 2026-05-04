@@ -231,6 +231,7 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
     
     # Generate 2D coordinate grid
     x_vals = np.linspace(-xlim, xlim, nx)
+   #x_vals = -x_vals
     y_vals = np.linspace(-ylim, ylim, ny)
     X, Y = np.meshgrid(x_vals, y_vals)
     
@@ -367,14 +368,15 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         inside_hot_rs = (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :])
         
         I_Halpha += emissivity_Halpha_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
-        I_OIII += emissivity_OIII_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
+        I_OIII += 5.*emissivity_OIII_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
         I_ff_total += emissivity_freefree_sr(n_RH_RS[i, :], T_RH_RS[i, :], 1.0, nu_ff) * inside_hot_rs * dz
+
         
         # Cold layer RS: only if radiative (H_cold > 0)
         if np.any(H_RS_cold[i, :] > 0):
             inside_cold_rs = (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0)
             I_Halpha += emissivity_Halpha_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            I_OIII += emissivity_OIII_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
+            I_OIII += 5.*emissivity_OIII_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
             I_ff_total += emissivity_freefree_sr(n_IL_RS[i, :], T_IL_RS[i, :], 1.0, nu_ff) * inside_cold_rs * dz
         
         # ========== FORWARD SHOCK (FS) ==========

@@ -73,7 +73,7 @@ def vnorm_forward(thr, rr, lam=0., Vstar=None):
     s = np.sin(thr)
     c = np.cos(thr)
     Aomega, Az = AA(thr, rr, lam)
-    return np.abs(Vstar * Aomega)
+    return Vstar * Aomega
 
 
 def vnorm_wind(thr, rr, lam=0., Vw=None):
@@ -184,6 +184,32 @@ def cooling_time(n_post, T_post):
     """
     lambda_val = lambda_T(T_post)
     return kB * T_post / (n_post * lambda_val)
+
+
+# ============================================================
+# Advection time
+# ============================================================
+
+def advection_time(thr, rr, R0_phys, comp, lam=0., shock='RS', Vw=None, Vstar=None):
+    """
+    Aproximate the advection velocity as the maximum btw v_tan and the speed of sound
+    to avoid numerical errors near the apex
+    """
+    v_t_val = vtan(thr, rr, lam, shock, Vw, Vstar)
+
+    if shock == 'RS':
+        v_perp = vnorm_wind(thr, rr, lam, Vw)
+    elif shock == 'FS':
+        v_perp = vnorm_forward(thr, rr, lam, Vstar)
+
+    cs_post = cs(v_perp, comp)
+
+    R_phys = rr * R0_phys
+
+    v_adv = np.maximum(v_t_val, cs_post)
+    #v_adv = v_t_val
+
+    return R_phys / np.maximum(v_adv, 1e-10)
 
 
 # ============================================================
@@ -366,7 +392,9 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=1e4, **kwargs):
     #t_adv = R_phys / v_t
     #t_adv = np.maximum(t_adv, 1e-10)
     v_adv = np.maximum(cs_post, v_t)
-    t_adv = np.maximum(R_phys/v_adv, 1e-10)
+    #v_adv = v_t
+    t_adv = R_phys/v_adv
+    #t_adv = np.maximum(R_phys/v_adv, 1e-10)
     
     # Radiative regime if cooling time < advection time
     is_radiative = t_cool < t_adv
@@ -470,115 +498,3 @@ def compute_layer_thickness(thr, rr, R0_phys, shock, T_IL=1e4, theta_min=0.1, **
             H_cold[mask_small] = H_cold[idx_min]
     
     return H_total, H_hot, H_cold, regime, None
-
-
-# ============================================================
-# Compatibility functions (old??)
-# ============================================================
-
-def pre_shock(thr, rr, shock, **kwargs):
-    """
-    Compatibility wrapper for pre_shock.
-    """
-    R0_phys = kwargs.get('R0_phys')
-    
-    if shock == 'FS':
-        Vstar = kwargs.get('Vstar')
-        n_ism = kwargs.get('n_ism')
-        lam = kwargs.get('lam', 0.)
-        n_pre, T_pre, cs = pre_shock_ism(Vstar, n_ism, lam)
-        n_pre = np.full_like(thr, n_pre)
-        T_pre = np.full_like(thr, T_pre)
-        cs = np.full_like(thr, cs)
-        v_perp = vnorm_forward(thr, rr, lam, Vstar)
-    else:  # RS
-        Mdot = kwargs.get('Mdot')
-        Vw = kwargs.get('Vw')
-        lam = kwargs.get('lam', 0.)
-        wind_regime = kwargs.get('wind_regime', 'hot')
-        wind_T_fixed = kwargs.get('wind_T_fixed', None)
-        
-        if R0_phys is None:
-            raise ValueError("R0_phys must be provided for reverse shock")
-        
-        r_phys = rr * R0_phys
-        n_pre, T_pre, cs = pre_shock_wind(Mdot, Vw, r_phys, wind_regime, wind_T_fixed)
-        v_perp = vnorm_wind(thr, rr, lam, Vw)
-    
-    return n_pre, T_pre, v_perp, cs
-
-
-def mach_number(v_perp, cs):
-    """Compatibility wrapper for mach_number."""
-    return v_perp / cs
-
-
-def compression_factor_rh(M):
-    """Compatibility wrapper for compression_factor_rh."""
-    return (gamma_ad + 1) * M**2 / ((gamma_ad - 1) * M**2 + 2)
-
-
-def temperature_ratio_rh(M):
-    """Compatibility wrapper for temperature_ratio_rh."""
-    return ((gamma_ad - 1) * M**2 + 2) * (2 * gamma_ad * M**2 - (gamma_ad - 1)) / ((gamma_ad + 1)**2 * M**2)
-
-
-def temperature_post_rh(T_pre, M):
-    """Compatibility wrapper for temperature_post_rh."""
-    T_ratio = temperature_ratio_rh(M)
-    return np.maximum(T_pre * T_ratio, 1e4)
-
-
-def density_post_rh(rho_pre, M):
-    """Compatibility wrapper for density_post_rh."""
-    comp = compression_factor_rh(M)
-    return rho_pre * comp
-
-
-def advection_time(thr, rr, R0_phys, comp, lam=0., shock='RS', Vw=None, Vstar=None):
-    """Compatibility wrapper for advection_time."""
-    v_t_val = vtan(thr, rr, lam, shock, Vw, Vstar)
-
-    if shock == 'RS':
-        v_perp = vnorm_wind(thr, rr, lam, Vw)
-    elif shock == 'FS':
-        v_perp = vnorm_forward(thr, rr, lam, Vstar)
-
-    cs_post = cs(v_perp, comp)
-
-    R_phys = rr * R0_phys
-
-    v_adv = np.maximum(v_t_val, cs_post)
-
-    return R_phys / np.maximum(v_adv, 1e-10)
-
-
-def normalized_thickness(thr, rr, R0_phys, shock, T_IL=1e4, component='total', **kwargs):
-    """
-    Normalized shocked layer thickness (H/R).
-    
-    Parameters:
-    -----------
-    component : str
-        'total', 'hot', or 'cold'
-    
-    Returns:
-    --------
-    H/R_phys : array
-    """
-    H_total, H_hot, H_cold, regime, _ = compute_layer_thickness(
-        thr, rr, R0_phys, shock, T_IL, **kwargs
-    )
-    
-    R_phys = rr * R0_phys
-    
-    if component == 'total':
-        H = H_total
-    elif component == 'hot':
-        H = H_hot
-    elif component == 'cold':
-        H = H_cold
-    else:
-        raise ValueError(f"Unknown component: {component}")
-    
-    return H / R_phys
