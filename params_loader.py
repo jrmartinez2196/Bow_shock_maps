@@ -57,7 +57,7 @@ def load_params_from_file(filename):
         print(f"Warning: Both 'lmb' ({params['lmb']}) and 'lam' ({params['lam']}) found. Using 'lam'.")
     
     # Ensure numeric types for all numeric parameters
-    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'lam', 'lmb']
+    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'T_ism', 'lmb']
     for key in numeric_keys:
         if key in params:
             params[key] = float(params[key])

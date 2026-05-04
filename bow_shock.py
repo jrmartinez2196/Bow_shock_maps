@@ -6,6 +6,7 @@ run as: python3 bow_shock.py [source_name] [params_dir]
 
 import numpy as np
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.widgets import Slider, Button
 from matplotlib.colors import LogNorm
 from scipy.interpolate import interp1d
@@ -90,9 +91,9 @@ class BowShock:
         # Visualization parameters
         self.zmax = self.params.get('zmax', 5e15)
         self.nz = self.params.get('nz', 75)
-        self.nx = self.params.get('nx', 100)
-        self.ny = self.params.get('ny', 100)
-        self.xlim_factor = self.params.get('xlim_factor', 10.0)
+        self.nx = self.params.get('nx', 50)
+        self.ny = self.params.get('ny', 50)
+        self.xlim_factor = self.params.get('xlim_factor', 5.0)
         self.ylim_factor = self.params.get('ylim_factor', 5.0)
         
         # Frequency for free-free emission [Hz]
@@ -101,12 +102,16 @@ class BowShock:
         # Store references to plot objects
         self.fig1 = None
         self.fig2 = None
+        self.fig3 = None
         self.fig_sliders = None
         self.sliders = {}
         self.lines = {}
         self.images = {}
         self.colorbars = {}
         self.profiles = {}
+        self.fig3_ax = None
+        self.rgb_image = None
+        self.fig3_colorbars = {}
         
         # Pre-compute theta grid
         print("Computing theta grid...")
@@ -127,7 +132,6 @@ class BowShock:
         print(f"  Vstar = {self.Vstar/1e5:.1f} km/s")
         print(f"  n_ism = {self.n_ism:.2f} cm^-3")
         print(f"  T_ism = {self.T_ism:.2f} K")
-        print(f"  lam = {self.lam:.5f} (α = {self.alpha:.5f})")
         print(f"  inclination = {self.inclination:.1f} deg")
         print("Initialization complete!")
     
@@ -436,6 +440,27 @@ class BowShock:
        
         self.fig2.tight_layout()
     
+    def create_figure3(self):
+        """
+        Creates third figure with RGB composite of all three emission maps.
+        Three independent colorbars with correct colormaps (Reds, Greens, Purples).
+        """
+        self.fig3 = plt.figure(figsize=(14, 10))
+        self.fig3.suptitle('Overlaid Emission Maps (RGB Composite)', fontsize=16)
+        
+        # Main axes for the RGB image
+        self.fig3_ax = self.fig3.add_subplot(1, 1, 1)
+        self.fig3_ax.set_xlabel('x [arcsec]')
+        self.fig3_ax.set_ylabel('y [arcsec]')
+        self.fig3_ax.set_title('Hα (Red) + [O III] (Green) + Free-free (Blue)')
+        self.fig3_ax.set_aspect('equal')
+        self.fig3_ax.grid(True, alpha=0.2)
+        
+        self.rgb_image = None
+        self.fig3_colorbars = {}
+        
+        self.fig3.tight_layout()
+    
     def create_sliders(self):
         """Create sliders in a separate window"""
         self.fig_sliders = plt.figure(figsize=(12, 8))
@@ -550,7 +575,7 @@ class BowShock:
             if self.images['Halpha'] is None:
                 self.images['Halpha'] = self.fig2_axes['maps'][0].imshow(
                     maps['I_Halpha'], origin='lower', extent=extent,
-                    cmap='Reds', norm=LogNorm()
+                    cmap='magma', norm=LogNorm()
                 )
                 self.colorbars['Halpha'] = plt.colorbar(self.images['Halpha'], 
                                                          ax=self.fig2_axes['maps'][0],
@@ -568,7 +593,7 @@ class BowShock:
             if self.images['OIII'] is None:
                 self.images['OIII'] = self.fig2_axes['maps'][1].imshow(
                     maps['I_OIII'], origin='lower', extent=extent,
-                    cmap='Greens', norm=LogNorm()
+                    cmap='magma', norm=LogNorm()
                 )
                 self.colorbars['OIII'] = plt.colorbar(self.images['OIII'],
                                                        ax=self.fig2_axes['maps'][1],
@@ -586,7 +611,7 @@ class BowShock:
             if self.images['ff'] is None:
                 self.images['ff'] = self.fig2_axes['maps'][2].imshow(
                     maps['I_ff_total'], origin='lower', extent=extent,
-                    cmap='Purples', norm=LogNorm()
+                    cmap='magma', norm=LogNorm()
                 )
                 self.colorbars['ff'] = plt.colorbar(self.images['ff'],
                                                      ax=self.fig2_axes['maps'][2],
@@ -627,17 +652,136 @@ class BowShock:
        
         self.fig2.canvas.draw_idle()
     
+    def update_figure3(self):
+        """
+        Update the RGB composite figure.
+        Halpha -> Red channel, OIII -> Green channel, Free-free -> Blue channel.
+        Three separate colorbars with correct colormaps (Reds, Greens, Purples).
+        """
+        try:
+            from mpl_toolkits.axes_grid1 import make_axes_locatable
+            import matplotlib as mpl
+            
+            maps = self.compute_maps()
+            
+            extent = [maps['x'][0], maps['x'][-1], maps['y'][0], maps['y'][-1]]
+            
+            def normalize_map_log(img):
+                """Normalize image to [0, 1] using log scaling."""
+                img_finite = img[np.isfinite(img)]
+                if len(img_finite) == 0:
+                    return np.zeros_like(img), 1e-10, 1.0
+                
+                # Use log10 scaling
+                img_pos = img_finite[img_finite > 0]
+                if len(img_pos) == 0:
+                    return np.zeros_like(img), 1e-10, 1.0
+                
+                vmin = np.percentile(img_pos, 1)
+                vmax = np.percentile(img_pos, 99)
+                
+                if vmax <= vmin:
+                    vmax = vmin * 100
+                
+                # Log normalization
+                log_img = np.log10(np.maximum(img, vmin/10))
+                log_vmin = np.log10(vmin)
+                log_vmax = np.log10(vmax)
+                norm_img = (log_img - log_vmin) / (log_vmax - log_vmin)
+                norm_img = np.clip(norm_img, 0, 1)
+                
+                return norm_img, vmin, vmax
+            
+            # Normalize each channel
+            red, vmin_r, vmax_r = normalize_map_log(maps['I_Halpha'])
+            green, vmin_g, vmax_g = normalize_map_log(maps['I_OIII'])
+            blue, vmin_b, vmax_b = normalize_map_log(maps['I_ff_total'])
+            
+            # Store vmin/vmax for colorbars
+            self.channel_limits = {
+                'Halpha': {'vmin': vmin_r, 'vmax': vmax_r},
+                'OIII': {'vmin': vmin_g, 'vmax': vmax_g},
+                'ff': {'vmin': vmin_b, 'vmax': vmax_b}
+            }
+            
+            # Stack into RGB array
+            rgb = np.stack([red, green, blue], axis=-1)
+            
+            # Create or update RGB image
+            if self.rgb_image is None:
+                self.rgb_image = self.fig3_ax.imshow(rgb, origin='lower', extent=extent)
+                
+                # Create three separate colorbar axes using make_axes_locatable
+                divider = make_axes_locatable(self.fig3_ax)
+                
+                # Colorbar 1: Halpha (Reds colormap)
+                ax_cbar_halpha = divider.append_axes("right", size="5%", pad=0.05)
+                norm_halpha = mpl.colors.Normalize(vmin=vmin_r, vmax=vmax_r)
+                sm_halpha = mpl.cm.ScalarMappable(norm=norm_halpha, cmap='Reds')
+                sm_halpha.set_array(maps['I_Halpha'])
+                cbar_halpha = self.fig3.colorbar(sm_halpha, cax=ax_cbar_halpha)
+                cbar_halpha.set_label('Hα Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
+                
+                # Colorbar 2: OIII (Greens colormap)
+                ax_cbar_oiii = divider.append_axes("right", size="5%", pad=0.35)
+                norm_oiii = mpl.colors.Normalize(vmin=vmin_g, vmax=vmax_g)
+                sm_oiii = mpl.cm.ScalarMappable(norm=norm_oiii, cmap='Greens')
+                sm_oiii.set_array(maps['I_OIII'])
+                cbar_oiii = self.fig3.colorbar(sm_oiii, cax=ax_cbar_oiii)
+                cbar_oiii.set_label('[O III] Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
+                
+                # Colorbar 3: Free-free (Purples colormap)
+                ax_cbar_ff = divider.append_axes("right", size="5%", pad=0.65)
+                norm_ff = mpl.colors.Normalize(vmin=vmin_b, vmax=vmax_b)
+                sm_ff = mpl.cm.ScalarMappable(norm=norm_ff, cmap='Purples')
+                sm_ff.set_array(maps['I_ff_total'])
+                cbar_ff = self.fig3.colorbar(sm_ff, cax=ax_cbar_ff)
+                cbar_ff.set_label('Free-free Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
+                
+                self.fig3_colorbars = {
+                    'Halpha': cbar_halpha,
+                    'OIII': cbar_oiii,
+                    'ff': cbar_ff
+                }
+                
+            else:
+                # Update existing RGB image
+                self.rgb_image.set_data(rgb)
+                self.rgb_image.set_extent(extent)
+                
+                # Update colorbars with new limits
+                norm_halpha = mpl.colors.Normalize(vmin=vmin_r, vmax=vmax_r)
+                self.fig3_colorbars['Halpha'].set_norm(norm_halpha)
+                self.fig3_colorbars['Halpha'].set_label('Hα Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
+                
+                norm_oiii = mpl.colors.Normalize(vmin=vmin_g, vmax=vmax_g)
+                self.fig3_colorbars['OIII'].set_norm(norm_oiii)
+                self.fig3_colorbars['OIII'].set_label('[O III] Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
+                
+                norm_ff = mpl.colors.Normalize(vmin=vmin_b, vmax=vmax_b)
+                self.fig3_colorbars['ff'].set_norm(norm_ff)
+                self.fig3_colorbars['ff'].set_label('Free-free Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
+            
+            self.fig3.canvas.draw_idle()
+        
+        except Exception as e:
+            print(f"Error in update_figure3: {e}")
+            import traceback
+            traceback.print_exc()
+        
     def update_all(self, val):
         """Update all figures"""
         self.get_params_from_sliders()
         self.update_figure1()
         self.update_figure2()
+        self.update_figure3()
     
     def run(self):
         """Run the application"""
         print("Creating figures...")
         self.create_figure1()
         self.create_figure2()
+        self.create_figure3()
         self.create_sliders()
         
         print("Initial update...")

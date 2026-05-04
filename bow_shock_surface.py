@@ -1,4 +1,4 @@
-# bow_shock_surface.py - VERSIÓN NOTEBOOK
+# bow_shock_surface.py
 
 import numpy as np
 from scipy.integrate import solve_ivp

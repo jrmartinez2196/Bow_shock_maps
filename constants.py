@@ -2,7 +2,7 @@
 import numpy as np
 
 mu = 1.3                    # mean molecular weight
-mu_sh = 0.6 				# shocked regoin mean molecular weight
+mu_sh = 0.6 				# shocked regoin and unshocked wind mean molecular weight
 mp = 1.6726219e-24          # proton mass
 kB = 1.380649e-16           # Boltzmann constant [erg/K]
 me = 9.1093837e-28          # electron mass
