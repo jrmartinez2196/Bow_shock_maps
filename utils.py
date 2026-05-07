@@ -212,7 +212,7 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
     
     # Precompute properties on a fine theta grid
     theta_precomp = np.linspace(1e-6, np.pi - 1e-6, 300)
-    rr_precomp = R_RS_func(theta_precomp) / R0_phys
+    rr_precomp = R_RS_func(theta_precomp) # already normalized
     
     # Precompute RS properties
     print("  Precomputing RS properties...")
