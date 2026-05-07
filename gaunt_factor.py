@@ -9,7 +9,6 @@ class GauntFactor:
         self.log_gamma2_start = -6.0
         self.log_u_start = -16.0
         self.step = 0.2
-
         self.gff = self._load_table(data_file)
 
     def _load_table(self, data_file):
@@ -80,12 +79,12 @@ class GauntFactor:
 
         return result
 
+
+# Global instance
 _gaunt_instance = None
 
 def gaunt_ff_calc(nu_ff, T_l, Zq_l, data_file='gauntff.dat'):
     global _gaunt_instance
-
     if _gaunt_instance is None:
         _gaunt_instance = GauntFactor(data_file)
-
     return _gaunt_instance.gaunt_ff_calc(nu_ff, T_l, Zq_l)
