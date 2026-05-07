@@ -125,7 +125,7 @@ class BowShock:
         
         # Frequency for free-free emission [Hz]
         self.continuum_frequencies = {
-            'radio': 1e9,           # 1 GHz - radio
+            'radio': 3e9,           # 3 GHz - radio
             'IR': 3e12,             # 3 THz - MIR
             'optical_R': 4.3e14,    # 700 nm - OP - Red
             'optical_V': 5.5e14,    # 545 nm - OP - Green
@@ -137,6 +137,7 @@ class BowShock:
         }
 
         band_name = self.params.get('continuum_band', 'FUV')
+        self.band_name = band_name
         self.nu_ff = self.continuum_frequencies.get(band_name, self.continuum_frequencies['FUV'])
         
         # Store references to plot objects
@@ -182,6 +183,7 @@ class BowShock:
     def set_continuum_band(self, band_name):
         """Modifies the frequency"""
         if band_name in self.continuum_frequencies:
+            self.band_name = band_name
             self.nu_ff = self.continuum_frequencies[band_name]
             print(f"Continuum band changed to {band_name} ({self.nu_ff:.2e} Hz)")
             if hasattr(self, 'fig2') and self.fig2 is not None:
@@ -384,7 +386,8 @@ class BowShock:
             'y': y_vals_arcsec,
             'I_Halpha': result['I_Halpha'],
             'I_OIII': result['I_OIII'],
-            'I_ff_total': result['I_ff_total']
+            'I_ff_total': result['I_ff_total'],
+            'I_ff_mJy' : result['I_ff_mJy']
         }
     
     def create_figure1(self):
@@ -636,7 +639,10 @@ class BowShock:
             # Clean data
             I_Halpha = sanitize_log_data(maps['I_Halpha'])
             I_OIII   = sanitize_log_data(maps['I_OIII'])
-            I_ff     = sanitize_log_data(maps['I_ff_total'])
+            if (self.band_name == 'radio'):
+                I_ff = sanitize_log_data(maps['I_ff_mJy'])
+            else:
+                I_ff = sanitize_log_data(maps['I_ff_total'])
 
             extent = [
                 np.min(maps['x']), np.max(maps['x']),
@@ -690,11 +696,19 @@ class BowShock:
                     )
                     
                     self.images[key] = img_obj
+                    if key == 'ff' and self.band_name == 'radio':
+                        cbar_label = r'Surface brightness [mJy arcsec$^{-2}$]'
+                    elif key == 'Halpha':
+                        cbar_label = r'Surface brightness [R]'
+                    else:
+                        cbar_label = r'Surface brightness [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]'
+
                     self.colorbars[key] = plt.colorbar(
                         img_obj,
                         ax=ax,
-                        label='Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]'
-                    )
+                        label=cbar_label
+                        )
+
                 else:
                     img.set_data(I_data)
                     img.set_extent(extent)
@@ -848,7 +862,7 @@ Available frequencies:
     if args.list_bands:
         print("Available spectrum bands to calculate free-free:")
         bands = {
-            'radio': '1 GHz - Radio',
+            'radio': '3 GHz - Radio',
             'IR': '3 THz - Mid infrared',
             'optical_R': '700 nm - Opt, red',
             'optical_V': '545 nm - Opt, green',

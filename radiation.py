@@ -1,7 +1,7 @@
 # radiation.py
 import numpy as np
 from gaunt_factor import GauntFactor
-from constants import h, kB
+from constants import h, kB, sr_per_arcsec2, Rayleigh
 
 def emissivity_Halpha_sr(n, T):
     """
@@ -16,8 +16,8 @@ def emissivity_Halpha_sr(n, T):
     T_arr = np.maximum(T_arr, 1e4)
     
     j_arcsec2 = 2.85e-33 * T_arr**-0.9 * n_arr**2
-    sr_per_arcsec2 = (206265.)**2
-    return j_arcsec2 * sr_per_arcsec2
+
+    return j_arcsec2/Rayleigh
 
 
 def emissivity_OIII_sr(n, T):
@@ -68,8 +68,9 @@ def emissivity_freefree_sr(n, T, Z, nu, gaunt_lookup):
     exp_factor = np.exp(-h * nu / (kB * T_arr))
     C_j = (6.8e-38 / (4 * np.pi)) * Z**2 * nu
     j = C_j * n_arr**2 * exp_factor * gaunt / np.sqrt(T_arr)
+    j_mJy = j / (1e-26 * nu) / sr_per_arcsec2 # Radio plot per arcsec^2
     
-    return j
+    return j, j_mJy
 
 def precompute_gaunt_for_temperatures(nu_ff, Z):
     """

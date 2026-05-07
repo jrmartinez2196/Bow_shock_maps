@@ -11,6 +11,8 @@ G = 6.67430e-8              # Gravitational constant
 sigma_T = 6.6524587e-25     # Thomson cross section
 Ry = 2.179872e-11  			# Rydberg constant [erg]
 h = 6.6260755e-27			# Planck constant
+sr_per_arcsec2 = (206265.)**2
+Rayleigh = 5.66e-18  		# erg/s/cm^2/arcsec^2 to Rayleigh. Useful for Halpha
 
 Msun = 1.989e33             # Solar mass
 Rsun = 6.957e10             # Solar radius

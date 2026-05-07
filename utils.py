@@ -328,6 +328,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     I_Halpha = np.zeros(n_pixels)
     I_OIII = np.zeros(n_pixels)
     I_ff_total = np.zeros(n_pixels)
+    I_ff_mJy = np.zeros(n_pixels)
     
     # Pre-evaluate ALL properties for ALL theta values at once
     # This is the key optimization - evaluate interpolators once, not per slice
@@ -373,16 +374,20 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         inside_hot_rs = (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :])
         
         I_Halpha += emissivity_Halpha_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
-        I_OIII += 5.*emissivity_OIII_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
-        I_ff_total += emissivity_freefree_sr(n_RH_RS[i, :], T_RH_RS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_hot_rs * dz
+        I_OIII += emissivity_OIII_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
 
+        j_ff, j_ff_mJy = emissivity_freefree_sr(n_RH_RS[i, :], T_RH_RS[i, :], Z_q, nu_ff, gaunt_lookup)
+        I_ff_total += j_ff * inside_hot_rs * dz
+        I_ff_mJy += j_ff_mJy * inside_hot_rs * dz
         
         # Cold layer RS: only if radiative (H_cold > 0)
         if np.any(H_RS_cold[i, :] > 0):
             inside_cold_rs = (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0)
             I_Halpha += emissivity_Halpha_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            I_OIII += 5.*emissivity_OIII_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            I_ff_total += emissivity_freefree_sr(n_IL_RS[i, :], T_IL_RS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_cold_rs * dz
+            I_OIII += emissivity_OIII_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
+            j_ff, j_ff_mJy = emissivity_freefree_sr(n_IL_RS[i, :], T_IL_RS[i, :], Z_q, nu_ff, gaunt_lookup)
+            I_ff_total += j_ff * inside_cold_rs * dz
+            I_ff_mJy += j_ff_mJy * inside_cold_rs * dz
         
         # ========== FORWARD SHOCK (FS) ==========
         # Cold layer FS: only if radiative
@@ -390,7 +395,9 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
             inside_cold_fs = (r_i >= CD_pos_i) & (r_i <= CD_pos_i + H_FS_cold[i, :]) & (H_FS_cold[i, :] > 0)
             I_Halpha += emissivity_Halpha_sr(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
             I_OIII += emissivity_OIII_sr(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
-            I_ff_total += emissivity_freefree_sr(n_IL_FS[i, :], T_IL_FS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_cold_fs * dz
+            j_ff, j_ff_mJy = emissivity_freefree_sr(n_IL_FS[i, :], T_IL_FS[i, :], Z_q, nu_ff, gaunt_lookup)
+            I_ff_total += j_ff * inside_cold_fs * dz
+            I_ff_mJy += j_ff_mJy * inside_cold_fs * dz
         
         # Hot layer FS: ALWAYS present
         # If adiabatic: hot_start = CD_pos (since H_FS_cold = 0)
@@ -400,13 +407,16 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         
         I_Halpha += emissivity_Halpha_sr(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
         I_OIII += emissivity_OIII_sr(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
-        I_ff_total += emissivity_freefree_sr(n_RH_FS[i, :], T_RH_FS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_hot_fs * dz
+        j_ff, j_ff_mJy = emissivity_freefree_sr(n_RH_FS[i, :], T_RH_FS[i, :], Z_q, nu_ff, gaunt_lookup)
+        I_ff_total += j_ff * inside_hot_fs * dz
+        I_ff_mJy += j_ff_mJy * inside_hot_fs * dz
     
     # Reshape to 2D
     result = {
         'I_Halpha': I_Halpha.reshape(shape_2d),
         'I_OIII': I_OIII.reshape(shape_2d),
         'I_ff_total': I_ff_total.reshape(shape_2d),
+        'I_ff_mJy': I_ff_mJy.reshape(shape_2d)
     }
     
     return result
