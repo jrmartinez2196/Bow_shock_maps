@@ -49,7 +49,7 @@ def get_norm(data):
     
     vmax = np.max(data)
     
-    vmin = vmax / 100.
+    vmin = vmax / 1000.
     
     return LogNorm(vmin=vmin, vmax=1.1*vmax)
 
@@ -117,9 +117,9 @@ class BowShock:
         
         # Visualization parameters
         self.zmax = self.params.get('zmax', 5e15)
-        self.nz = self.params.get('nz', 200)
-        self.nx = self.params.get('nx', 250)
-        self.ny = self.params.get('ny', 250)
+        self.nz = self.params.get('nz', 150)
+        self.nx = self.params.get('nx', 300)
+        self.ny = self.params.get('ny', 300)
         self.xlim_factor = self.params.get('xlim_factor', 10.0)
         self.ylim_factor = self.params.get('ylim_factor', 10.0)
         
@@ -362,10 +362,8 @@ class BowShock:
         alpha = lam/(1-lam)
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
         
-        #xlim = self.xlim_factor * R0_corrected
-        #ylim = self.ylim_factor * R0_corrected
-        xlim = 5. * R0_corrected
-        ylim = 5. * R0_corrected
+        xlim = 5.*self.xlim_factor * R0_corrected
+        ylim = 5.*self.ylim_factor * R0_corrected
         inclination_rad = np.deg2rad(90 - self.inclination)
         zmax = max(self.zmax, 5 * R0_corrected)
         
@@ -476,9 +474,7 @@ class BowShock:
         ax_ff = self.fig2.add_subplot(2, 3, 3)
        
         # Bottom row: radial profiles
-        ax_prof_Halpha = self.fig2.add_subplot(2, 3, 4)
-        ax_prof_OIII = self.fig2.add_subplot(2, 3, 5)
-        ax_prof_ff = self.fig2.add_subplot(2, 3, 6)
+        ax_radial_profiles = self.fig2.add_subplot(2, 3, (4,6))
         
         # Configure map axes
         for ax, title in zip([ax_Halpha, ax_OIII, ax_ff], 
@@ -490,18 +486,15 @@ class BowShock:
             ax.grid(True, alpha=0.2)
         
         # Configure profile axes
-        for ax, title in zip([ax_prof_Halpha, ax_prof_OIII, ax_prof_ff],
-                            [r'H$\alpha$ Profile', '[O III] Profile', 'Free-free Profile']):
-            ax.set_xlabel('Radius [arcsec]')
-            ax.set_ylabel('Intensity [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]')
-            ax.set_title(title)
-            ax.grid(True, alpha=0.3)
-            ax.set_xlim(0, 250)
+        ax_radial_profiles.set_title('Normalizaed radial Emission Profiles')
+        ax_radial_profiles.set_xlabel('Radius [arcsec]')
+        ax_radial_profiles.set_ylabel('')
+        ax_radial_profiles.set_xlim(0,150)
         
         # Store axes and images
         self.fig2_axes = {
             'maps': [ax_Halpha, ax_OIII, ax_ff],
-            'profiles': [ax_prof_Halpha, ax_prof_OIII, ax_prof_ff]
+            'profiles' : ax_radial_profiles
         }
         
         # Initialize image placeholders
@@ -522,10 +515,12 @@ class BowShock:
             'OIII': None,
             'ff': None
         }
-        
-        # Initialize profile lines
-        for i, key in enumerate(['Halpha', 'OIII', 'ff']):
-            self.profiles[key], = self.fig2_axes['profiles'][i].plot([], [], 'b-', linewidth=2)
+
+        self.profiles['Halpha'], = self.fig2_axes['profiles'].plot([], [], 'r-', linewidth=2, label=r'H$\alpha$')
+        self.profiles['OIII'], = self.fig2_axes['profiles'].plot([], [], 'g-.', linewidth=2, label='[O III]')
+        self.profiles['ff'], = self.fig2_axes['profiles'].plot([], [], 'b--', linewidth=2, label='Free-free')
+
+        self.fig2_axes['profiles'].legend()
        
         self.fig2.tight_layout()
     
@@ -546,7 +541,7 @@ class BowShock:
             ('Vw', 'Vw [km/s]', (50, 5000), self.Vw/1e5),
             ('Vstar', 'Vstar [km/s]', (10, 500), self.Vstar/1e5),
             ('n_ism', 'n_ISM [cm⁻³]', (0.01, 10.0), self.n_ism),
-            ('T_ism', 'T_ISM [K]', (10, 1e6), self.T_ism),
+            ('T_ism', 'T_ISM [K]', (100, 1.e6), self.T_ism),
             ('inclination', 'Inclination [°]', (0, 90), self.inclination),
         ]
         
@@ -665,7 +660,7 @@ class BowShock:
             R0_arc = arcsecond(R0_corrected, self.distance)
 
 
-            zoom_factor = 3.0
+            zoom_factor = 5.0
             dx = zoom_factor * R0_arc
             dy = zoom_factor * R0_arc
 
@@ -738,7 +733,7 @@ class BowShock:
 
             # Zoom
             for ax in self.fig2_axes['maps']:
-                ax.set_xlim(xmin, xmax)
+                ax.set_xlim(xmin, 1.5*xmax)
                 ax.set_ylim(ymin, ymax)
                 ax.set_aspect('equal')
 
@@ -746,30 +741,34 @@ class BowShock:
             if np.any(I_Halpha > 0):
                 r_prof, prof_Halpha = radial_profile(
                     maps['x'], maps['y'], I_Halpha,
-                    dX=0.0, nbins=33, r_min=0.0, r_max=250.0
+                    dX=0.0, nbins=33, r_min=0.0, r_max=150.0
                 )
                 _, prof_OIII = radial_profile(
                     maps['x'], maps['y'], I_OIII,
-                    dX=0.0, nbins=33, r_min=0.0, r_max=250.0
+                    dX=0.0, nbins=33, r_min=0.0, r_max=150.0
                 )
                 _, prof_ff = radial_profile(
                     maps['x'], maps['y'], I_ff,
-                    dX=0.0, nbins=33, r_min=0.0, r_max=250.0
+                    dX=0.0, nbins=33, r_min=0.0, r_max=150.0
                 )
                 
-                self.profiles['Halpha'].set_data(r_prof, prof_Halpha)
-                self.profiles['OIII'].set_data(r_prof, prof_OIII)
-                self.profiles['ff'].set_data(r_prof, prof_ff)
+                # Normalize each profile to its maximum
+                prof_Halpha_norm = prof_Halpha / np.max(prof_Halpha)
+                prof_OIII_norm = prof_OIII / np.max(prof_OIII)
+                prof_ff_norm = prof_ff / np.max(prof_ff)
                 
-                for ax, prof in zip(
-                    self.fig2_axes['profiles'],
-                    [prof_Halpha, prof_OIII, prof_ff]
-                ):
-                    if len(prof) > 0 and np.max(prof) > 0:
-                        ax.set_ylim(0, np.max(prof) * 1.1)
-                    ax.relim()
-                    ax.autoscale_view()
-
+                # Update profiles with normalized data
+                self.profiles['Halpha'].set_data(r_prof, prof_Halpha_norm)
+                self.profiles['OIII'].set_data(r_prof, prof_OIII_norm)
+                self.profiles['ff'].set_data(r_prof, prof_ff_norm)
+                
+                # Yaxis covering shorter range
+                self.fig2_axes['profiles'].set_ylim(0, 1.1)
+                self.fig2_axes['profiles'].set_ylabel('Normalized Intensity')
+                
+                self.fig2_axes['profiles'].relim()
+                self.fig2_axes['profiles'].autoscale_view(scaley=False)
+                
         except Exception as e:
             print(f"Error in update_figure2: {e}")
             import traceback
