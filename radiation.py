@@ -52,20 +52,40 @@ def emissivity_OIII_sr(n, T):
     return j
 
 
-def emissivity_freefree_sr(n, T, Z, nu=2e6*1e9):
+def emissivity_freefree_sr(n, T, Z, nu, gaunt_lookup):
     """
     Free-free emissivity [erg s^-1 cm^-3 sr^-1]
+    It uses a precomputed lookup table for the gaunt factors
     """
-    from gaunt_factor import gaunt_ff_calc
-    
     n_arr = np.asarray(n, dtype=float)
     T_arr = np.asarray(T, dtype=float)
     T_arr = np.clip(T_arr, 1e4, 1e8)
     
-    gaunt = gaunt_ff_calc(nu, T_arr, Z)
+    # Fast gaunt from lookup table (interpolation)
+    gaunt = gaunt_lookup(T_arr)
     
     # Emissivity calculation
     exp_factor = np.exp(-h * nu / (kB * T_arr))
-    j = (6.8e-38 / (4 * np.pi)) * Z**2 * n_arr**2 * nu * exp_factor * gaunt / np.sqrt(T_arr)
+    C_j = (6.8e-38 / (4 * np.pi)) * Z**2 * nu
+    j = C_j * n_arr**2 * exp_factor * gaunt / np.sqrt(T_arr)
     
     return j
+
+def precompute_gaunt_for_temperatures(nu_ff, Z):
+    """
+    Create a fast lookup function for gaunt factors at specific temperatures.
+    """
+    from gaunt_factor import gaunt_ff_calc
+    
+    T_values = np.logspace(4, 8, 500)  # 10^4 to 10^8 K, 500 points
+    logT_values = np.log10(T_values)
+    gaunt_values = gaunt_ff_calc(nu_ff, T_values, Z)
+    
+    # Create interpolation function
+    def gaunt_lookup(T):
+        """Fast interpolation from precomputed table"""
+        T_clipped = np.clip(T, 1e4, 1e8)
+        logT_clipped = np.log10(T_clipped)
+        return np.interp(logT_clipped, logT_values, gaunt_values)
+    
+    return gaunt_lookup

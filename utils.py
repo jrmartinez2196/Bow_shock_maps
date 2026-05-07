@@ -11,7 +11,7 @@ from thermodynamics import (
     post_shock_conditions
 )
 from radiation import emissivity_Halpha_sr, emissivity_OIII_sr, emissivity_freefree_sr
-
+from radiation import precompute_gaunt_for_temperatures
 
 def arcsecond(R, d):
     """
@@ -292,6 +292,11 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     result : dict
         Integrated intensities: I_Halpha, I_OIII, I_ff_total
     """
+
+    # Precompute gaunt factors for faster calculation of f-f emission
+    Z_q = 1.0
+    gaunt_lookup = precompute_gaunt_for_temperatures(nu_ff, Z=Z_q)
+
     lam = 10**lmb
     ci, si = np.cos(inclination), np.sin(inclination)
     
@@ -369,7 +374,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         
         I_Halpha += emissivity_Halpha_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
         I_OIII += 5.*emissivity_OIII_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
-        I_ff_total += emissivity_freefree_sr(n_RH_RS[i, :], T_RH_RS[i, :], 1.0, nu_ff) * inside_hot_rs * dz
+        I_ff_total += emissivity_freefree_sr(n_RH_RS[i, :], T_RH_RS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_hot_rs * dz
 
         
         # Cold layer RS: only if radiative (H_cold > 0)
@@ -377,7 +382,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
             inside_cold_rs = (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0)
             I_Halpha += emissivity_Halpha_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
             I_OIII += 5.*emissivity_OIII_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            I_ff_total += emissivity_freefree_sr(n_IL_RS[i, :], T_IL_RS[i, :], 1.0, nu_ff) * inside_cold_rs * dz
+            I_ff_total += emissivity_freefree_sr(n_IL_RS[i, :], T_IL_RS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_cold_rs * dz
         
         # ========== FORWARD SHOCK (FS) ==========
         # Cold layer FS: only if radiative
@@ -385,7 +390,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
             inside_cold_fs = (r_i >= CD_pos_i) & (r_i <= CD_pos_i + H_FS_cold[i, :]) & (H_FS_cold[i, :] > 0)
             I_Halpha += emissivity_Halpha_sr(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
             I_OIII += emissivity_OIII_sr(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
-            I_ff_total += emissivity_freefree_sr(n_IL_FS[i, :], T_IL_FS[i, :], 1.0, nu_ff) * inside_cold_fs * dz
+            I_ff_total += emissivity_freefree_sr(n_IL_FS[i, :], T_IL_FS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_cold_fs * dz
         
         # Hot layer FS: ALWAYS present
         # If adiabatic: hot_start = CD_pos (since H_FS_cold = 0)
@@ -395,7 +400,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         
         I_Halpha += emissivity_Halpha_sr(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
         I_OIII += emissivity_OIII_sr(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
-        I_ff_total += emissivity_freefree_sr(n_RH_FS[i, :], T_RH_FS[i, :], 1.0, nu_ff) * inside_hot_fs * dz
+        I_ff_total += emissivity_freefree_sr(n_RH_FS[i, :], T_RH_FS[i, :], Z_q, nu_ff, gaunt_lookup) * inside_hot_fs * dz
     
     # Reshape to 2D
     result = {
