@@ -840,8 +840,8 @@ Available frequencies:
     parser.add_argument(
         '--params-dir', '-p',
         type=str,
-        default='.',
-        help='Path to parameters file (default: current directory)'
+        default='Systems',
+        help='Path to parameters file (default: Systems)'
     )
     
     parser.add_argument(
