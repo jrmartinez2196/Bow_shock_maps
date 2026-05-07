@@ -1,0 +1,9 @@
+{
+	'Mdot' : 1.e-5,
+	'Vw' : 3000.,
+	'Vstar' : 50,
+	'n_ism' : 9.,
+	'dist' : 1.7e3,	
+	'inclination' : 30.,
+	'T_ism' : 8.e3
+}
