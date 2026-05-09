@@ -101,6 +101,9 @@ class BowShock:
         
         # Inclination: degrees
         self.inclination = self.params['inclination']
+
+        # Projected angle (PA = 0° -> towards north, measured from north to east in degrees)
+        self.PA = self.params['PA']
         
         # Initialize T_ism (will be controlled by slider)
         self.T_ism = self.params.get('T_ism', 8.e3)
@@ -371,7 +374,8 @@ class BowShock:
         
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps_fast(
             xlim, ylim, self.nx, self.ny, self.R_RS_func,
-            inclination=inclination_rad, zmax=zmax, nz=self.nz,
+            inclination=inclination_rad, PA = self.PA,
+            zmax=zmax, nz=self.nz,
             lmb=self.lmb, R0_phys=R0_corrected,
             T_IL=self.T_IL,
             Vstar=self.Vstar, n_ism=self.n_ism,
@@ -651,29 +655,39 @@ class BowShock:
 
             #Projected values
             R0_phys = self.update_R0()
+            # Taking into account ISM thermal pressure
             R0_corrected = R0_phys / np.sqrt(1 + self.alpha)
 
             inc = np.deg2rad(self.inclination)
 
-            # Location of the stagnation point
+            # Star translation from the origin
+            dx_star = arcsecond(R0_corrected * np.cos(inc), self.distance)
+            dy_star = 0.0
+
+            # Rotate according to PA. PA = 0 -> BS pointing towards north, measured from north to east
+            PA_rot = np.deg2rad(self.PA - 90.)
+
+            x_star = dx_star*np.cos(PA_rot) + dy_star*np.sin(PA_rot)
+            y_star = dx_star*np.sin(PA_rot) - dy_star*np.cos(PA_rot)
+
+            # Apex
             x0 = 0.0
             y0 = 0.0
 
-            # Location of the star
-            x_star = 0.0 + arcsecond(R0_corrected * np.cos(inc), self.distance)
-            y_star = 0.0
+            # Map limits
+            xmap_min = np.min(maps['x'])
+            xmap_max = np.max(maps['x'])
 
-            R0_arc = arcsecond(R0_corrected, self.distance)
+            ymap_min = np.min(maps['y'])
+            ymap_max = np.max(maps['y'])
 
+            zoom_factor = 10.0
 
-            zoom_factor = 5.0
-            dx = zoom_factor * R0_arc
-            dy = zoom_factor * R0_arc
+            xmin = -zoom_factor * arcsecond(R0_corrected, self.distance)
+            xmax =  zoom_factor * arcsecond(R0_corrected, self.distance)
 
-            xmin = x0 - dx
-            xmax = x0 + dx
-            ymin = y0 - dy
-            ymax = y0 + dy
+            ymin = -zoom_factor * arcsecond(R0_corrected, self.distance)
+            ymax =  zoom_factor * arcsecond(R0_corrected, self.distance)
 
             # Emission maps
             data_list = [I_Halpha, I_OIII, I_ff]
@@ -739,7 +753,7 @@ class BowShock:
                     dx_arrow, dy_arrow,
                     color='black',
                     width=0.0,
-                    head_width=0.05 * R0_arc,
+                    head_width=0.05 * arcsecond(R0_corrected, self.distance),
                     length_includes_head=True,
                     zorder=5
                 )
@@ -747,7 +761,7 @@ class BowShock:
 
             # Zoom
             for ax in self.fig2_axes['maps']:
-                ax.set_xlim(xmin, 1.5*xmax)
+                ax.set_xlim(xmin, xmax)
                 ax.set_ylim(ymin, ymax)
                 ax.set_aspect('equal')
 

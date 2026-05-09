@@ -64,7 +64,7 @@ def get_r_theta_from_christie(lam, n_theta=800):
         eps_start=1e-6
     )
     
-    # Insert theta=0 with r=1 (apex condition)
+    # Apex
     theta_vals = np.insert(theta_vals, 0, 0.0)
     r_vals = np.insert(r_vals, 0, 1.0)
     
@@ -111,7 +111,7 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=1e4, *
         - v_perp: Perpendicular velocity [cm/s]
         - v_tan: Tangential velocity [cm/s]
     """
-    # Compute post-shock conditions for all theta at once
+    # Compute post-shock conditions for all theta
     n_RH, T_RH, n_IL, T_IL_arr, regime, H_hot, H_cold, H_total = post_shock_conditions(
         theta_grid, rr_grid, shock, R0_phys, T_IL, **kwargs
     )
@@ -130,7 +130,7 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=1e4, *
     # Convert regime to float for interpolation (1 = radiative, 0 = adiabatic)
     regime_float = np.where(np.array(regime) == 'radiative', 1.0, 0.0)
     
-    # Create RegularGridInterpolator (much faster than interp1d for large arrays)
+    # Create RegularGridInterpolator
     theta_unique = theta_grid
     
     props = {
@@ -150,7 +150,8 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=1e4, *
 
 
 def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
-                              inclination=0.0, zmax=5e15, nz=75,
+                              inclination=0.0, PA = 0.,
+                              zmax=5e15, nz=75,
                               lmb=0.0, R0_phys=1.0,
                               rs_radiative=None, fs_radiative=None,
                               T_IL=1e4,
@@ -210,20 +211,15 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
     """
     lam = 10**lmb
     
-    # Precompute properties on a fine theta grid
     theta_precomp = np.linspace(1e-6, np.pi - 1e-6, 300)
     rr_precomp = R_RS_func(theta_precomp) # already normalized
     
-    # Precompute RS properties
-    print("  Precomputing RS properties...")
     rs_props = precompute_shock_properties(
         theta_precomp, rr_precomp, R0_phys, 'RS', T_IL=T_IL,
         Mdot=Mdot, Vw=Vw, lam=lam,
         wind_regime=wind_regime, wind_T_fixed=wind_T_fixed
     )
     
-    # Precompute FS properties
-    print("  Precomputing FS properties...")
     fs_props = precompute_shock_properties(
         theta_precomp, rr_precomp, R0_phys, 'FS', T_IL=T_IL,
         Vstar=Vstar, n_ism=n_ism, lam=lam
@@ -231,17 +227,24 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
     
     # Generate 2D coordinate grid
     x_vals = np.linspace(-xlim, xlim, nx)
-   #x_vals = -x_vals
     y_vals = np.linspace(-ylim, ylim, ny)
     X, Y = np.meshgrid(x_vals, y_vals)
+
+
+    # Rotate according to projected angle
+    PA_rot = PA - 90.
+    PA_rot_rad = np.deg2rad(PA_rot)
+    X_rot = X*np.cos(PA_rot_rad) + Y*np.sin(PA_rot_rad)
+    Y_rot = X*np.sin(PA_rot_rad) - Y*np.cos(PA_rot_rad)
     
     # Convert to arcseconds
     x_vals_arcsec = arcsecond(x_vals, distance)
     y_vals_arcsec = arcsecond(y_vals, distance)
     
-    # Perform optimized LOS projection
+    # LOS projection
     result = los_projection_vectorized(
-        X, Y, R_RS_func, inclination=inclination, zmax=zmax, nz=nz,
+        X_rot, Y_rot, R_RS_func, inclination=inclination,
+        zmax=zmax, nz=nz,
         lmb=lmb, R0_phys=R0_phys,
         rs_props=rs_props, fs_props=fs_props,
         nu_ff=nu_ff
@@ -250,7 +253,7 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
     return x_vals_arcsec, y_vals_arcsec, result
 
 
-def los_projection_vectorized(x, y, R_RS_func, inclination=0.0, 
+def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
                                zmax=5e15, nz=500, 
                                lmb=0.0, R0_phys=1.0,
                                rs_props=None, fs_props=None,
@@ -304,7 +307,6 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     z = np.linspace(-zmax, zmax, nz)
     dz = z[1] - z[0]
     
-    # Prepare coordinates for broadcasting
     x_flat = x.ravel()[None, :]  # shape (1, n_pixels)
     y_flat = y.ravel()[None, :]
     z_grid = z[:, None]  # shape (nz, 1)
@@ -313,8 +315,8 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     X = ci * x_flat + si * z_grid
     Y = y_flat
     Z = -si * x_flat + ci * z_grid
-    
-    # Spherical coordinates (fully vectorized)
+
+    # Spherical coordinates
     r = np.sqrt(X**2 + Y**2 + Z**2)
     theta = np.arccos(np.clip(Z / np.where(r == 0, 1, r), -1, 1))
     
@@ -329,40 +331,38 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     I_OIII = np.zeros(n_pixels)
     I_ff_total = np.zeros(n_pixels)
     I_ff_mJy = np.zeros(n_pixels)
-    
-    # Pre-evaluate ALL properties for ALL theta values at once
-    # This is the key optimization - evaluate interpolators once, not per slice
+
     theta_flat = theta.ravel()
     
-    # --- RS properties (evaluated once for entire 3D grid) ---
+    # --- RS properties
     H_RS_hot = rs_props['H_hot'](theta_flat).reshape(theta.shape)
     H_RS_cold = rs_props['H_cold'](theta_flat).reshape(theta.shape)
     
     n_RH_RS = rs_props['n_RH'](theta_flat).reshape(theta.shape)
     T_RH_RS = rs_props['T_RH'](theta_flat).reshape(theta.shape)
     
-    # Cold layer properties (NO NaNs - equals hot layer if adiabatic)
+    # Cold layer
     n_IL_RS = rs_props['n_IL'](theta_flat).reshape(theta.shape)
     T_IL_RS = rs_props['T_IL_arr'](theta_flat).reshape(theta.shape)
     
-    # --- FS properties (evaluated once for entire 3D grid) ---
+    # --- FS properties
     H_FS_cold = fs_props['H_cold'](theta_flat).reshape(theta.shape)
     H_FS_hot = fs_props['H_hot'](theta_flat).reshape(theta.shape)
     
     n_RH_FS = fs_props['n_RH'](theta_flat).reshape(theta.shape)
     T_RH_FS = fs_props['T_RH'](theta_flat).reshape(theta.shape)
     
-    # Cold layer properties (NO NaNs - equals hot layer if adiabatic)
+    # Cold layer
     n_IL_FS = fs_props['n_IL'](theta_flat).reshape(theta.shape)
     T_IL_FS = fs_props['T_IL_arr'](theta_flat).reshape(theta.shape)
     
-    # Contact discontinuity position (between RS and FS)
+    # Contact discontinuity position
     CD_pos = R_RS + H_RS_hot + H_RS_cold
     
-    # Forward shock position (outer boundary)
+    # Forward shock position
     FS_pos = CD_pos + H_FS_cold + H_FS_hot
     
-    # LOS integration - vectorized per slice
+    # LOS integration
     for i in range(nz):
         r_i = r[i, :]
         R_RS_i = R_RS[i, :]
@@ -370,7 +370,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         FS_pos_i = FS_pos[i, :]
         
         # ========== REVERSE SHOCK (RS) ==========
-        # Hot layer: always present
+        # Hot layer:
         inside_hot_rs = (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :])
         
         I_Halpha += emissivity_Halpha_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
@@ -399,7 +399,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
             I_ff_total += j_ff * inside_cold_fs * dz
             I_ff_mJy += j_ff_mJy * inside_cold_fs * dz
         
-        # Hot layer FS: ALWAYS present
+        # Hot layer FS
         # If adiabatic: hot_start = CD_pos (since H_FS_cold = 0)
         # If radiative: hot_start = CD_pos + H_FS_cold
         hot_start = CD_pos_i + H_FS_cold[i, :]
@@ -423,7 +423,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
 
 def radial_profile(x_vals, y_vals, image, dX=0.0, nbins=33, r_min=0., r_max=200.):
     """
-    Compute radial profile from a 2D image using mask-based binning.
+    Compute radial profile from a 2D image
     
     Parameters
     ----------
@@ -448,7 +448,6 @@ def radial_profile(x_vals, y_vals, image, dX=0.0, nbins=33, r_min=0., r_max=200.
     X, Y = np.meshgrid(x_vals, y_vals)
     R = np.sqrt((X - dX)**2 + Y**2)
     
-    # Use linear bins for better control
     radii = np.linspace(r_min, r_max, nbins + 1)
     r_centers = 0.5 * (radii[1:] + radii[:-1])
     profile = np.zeros(nbins)

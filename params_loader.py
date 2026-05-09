@@ -57,7 +57,7 @@ def load_params_from_file(filename):
         print(f"Warning: Both 'lmb' ({params['lmb']}) and 'lam' ({params['lam']}) found. Using 'lam'.")
     
     # Ensure numeric types for all numeric parameters
-    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'T_ism', 'lmb']
+    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'PA', 'T_ism', 'lmb']
     for key in numeric_keys:
         if key in params:
             params[key] = float(params[key])
@@ -99,7 +99,8 @@ def validate_params(params):
     - Vw: float > 0
     - Vstar: float > 0
     - n_ism: float > 0
-    - inclination: float (0-180 deg)
+    - inclination: float (0°-180°)
+    - PA : float (0°-360°)
     
     Optional parameters (can be set by sliders or defaults):
     - dist: float > 0 (default: 224.0 pc)
@@ -126,11 +127,18 @@ def validate_params(params):
         raise ValueError(f"dist must be > 0, got {params['dist']}")
     if not (0 <= params['inclination'] <= 180):
         raise ValueError(f"inclination must be between 0 and 180, got {params['inclination']}")
+    if not (0 <= params['PA'] < 360):
+        raise ValueError(f"PA must be between 0 and 360, got {params['PA']}")
     
     # Set default for inclination if not present
     if 'inclination' not in params:
         params['inclination'] = 60.
         print(f"Note: 'inclination' not found in file. Using default: {params['inclination']}°")
+
+     # Set default for PA if not present
+    if 'PA' not in params:
+        params['PA'] = 90.
+        print(f"Note: 'PA' not found in file. Using default: {params['PA']}°")
     
     # Set default initial lam (will be controlled by slider)
     if 'lam' not in params and 'lmb' not in params:
