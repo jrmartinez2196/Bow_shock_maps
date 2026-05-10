@@ -8,6 +8,7 @@ import sys
 import argparse
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 from matplotlib.widgets import Slider, Button
 from matplotlib.colors import LogNorm
@@ -476,6 +477,13 @@ class BowShock:
         ax_Halpha = self.fig2.add_subplot(2, 3, 1)
         ax_OIII = self.fig2.add_subplot(2, 3, 2)
         ax_ff = self.fig2.add_subplot(2, 3, 3)
+
+        # Contour leves
+        self.contours = {
+            'Halpha': None,
+            'OIII': None,
+            'ff': None
+        }
        
         # Bottom row: radial profiles
         ax_radial_profiles = self.fig2.add_subplot(2, 3, (4,6))
@@ -689,9 +697,11 @@ class BowShock:
             # Emission maps
             data_list = [I_Halpha, I_OIII, I_ff]
             keys = ['Halpha', 'OIII', 'ff']
-            cmaps = ['inferno', 'inferno', 'inferno']
+            # cmap inferno with white at lower limit. Save printer ink!
+            cmap = cm.get_cmap('inferno').copy()
+            cmap.set_under('white')
             
-            for i, (key, I_data, cmap) in enumerate(zip(keys, data_list, cmaps)):
+            for i, (key, I_data) in enumerate(zip(keys, data_list)):
                 ax = self.fig2_axes['maps'][i]
                 img = self.images[key]
                 
@@ -706,16 +716,8 @@ class BowShock:
                         norm=norm
                     )
 
-                    # contour leves
-                    ax.contour(
-                        maps['x'],
-                        maps['y'],
-                        I_data,
-                        levels=np.max(I_data) * np.array([0.01, 0.03, 0.1, 0.6]),
-                        colors='lime'
-                    )
-                    
                     self.images[key] = img_obj
+
                     if key == 'ff' and self.band_name == 'radio':
                         cbar_label = r'Surface brightness [mJy arcsec$^{-2}$]'
                     elif key == 'Halpha':
@@ -727,12 +729,27 @@ class BowShock:
                         img_obj,
                         ax=ax,
                         label=cbar_label
-                        )
+                    )
 
                 else:
                     img.set_data(I_data)
                     img.set_extent(extent)
                     img.set_norm(norm)
+
+                # Contour levels
+                if self.contours[key] is not None:
+                    for coll in self.contours[key].collections:
+                        coll.remove()
+
+                cont = ax.contour(
+                    maps['x'],
+                    maps['y'],
+                    I_data,
+                    levels=np.max(I_data) * np.array([0.01, 0.1, 0.5]),
+                    colors='lime'
+                )
+
+                self.contours[key] = cont
 
                 # Star
                 if self.star_markers[key] is None:
