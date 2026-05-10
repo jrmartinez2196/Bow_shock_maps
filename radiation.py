@@ -41,8 +41,8 @@ def emissivity_OIII_sr(n, T):
     # Collision rate
     q12 = 8.629e-6 * gamma_12 * np.exp(-E12_k / T_arr) / (np.sqrt(T_arr) * g_12)
     
-    # O2+ fraction
-    no_ion2 = 1e-4 * n_arr
+    # O2+ fraction (4.57e-4 assuming solar abundances, Gnat & Sternberg 2007)
+    no_ion2 = 4.57e-4 * n_arr
     
     n2 = no_ion2 * n_arr * q12 / A21
     
@@ -68,7 +68,7 @@ def emissivity_freefree_sr(n, T, Z, nu, gaunt_lookup):
     exp_factor = np.exp(-h * nu / (kB * T_arr))
     C_j = (6.8e-38 / (4 * np.pi)) * Z**2 * nu
     j = C_j * n_arr**2 * exp_factor * gaunt / np.sqrt(T_arr)
-    j_mJy = j / (1e-26 * nu) / sr_per_arcsec2 # Radio plot per arcsec^2
+    j_mJy = j / (1e-26 * nu) / sr_per_arcsec2 # Radio plot mJy per arcsec^2
     
     return j, j_mJy
 
