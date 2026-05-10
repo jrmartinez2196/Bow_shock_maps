@@ -19,7 +19,6 @@ from params_loader import get_source_params, validate_params
 from bow_shock_surface import (
     standoff_distance,
     integrate_r_theta_christie,
-    bow_shock_surface_christie
 )
 from thermodynamics import (
     post_shock_conditions,
@@ -84,7 +83,7 @@ class BowShock:
         self.params = get_source_params(source_name, params_dir)
         validate_params(self.params)
         
-        # Extract parameters with CONVERSIONS to CGS
+        # Extract parameters with conversions to cgs
         # Mdot: from Msun/yr to g/s
         self.Mdot_msun = self.params['Mdot']
         self.Mdot = self.params['Mdot'] * Msun_yr
@@ -292,11 +291,11 @@ class BowShock:
             'ratio' : Cooling-to-advection time ratios
         """
         R0_phys = self.update_R0()
+        alpha = self.alpha
         lam = self.lam
-        alpha = lam/(1-lam)
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
 
-        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(self.inclination*np.pi/180.), self.distance)} ''")
+        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(self.inclination*np.pi/180.), self.distance):.1f} ''")
         
         thr, rr_norm = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=np.pi)
         
@@ -362,8 +361,7 @@ class BowShock:
     def compute_maps(self):
         """Compute emission maps using vectorized code."""
         R0_phys = self.update_R0()
-        lam = self.lam
-        alpha = lam/(1-lam)
+        alpha = self.alpha
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
         
         xlim = 5.*self.xlim_factor * R0_corrected

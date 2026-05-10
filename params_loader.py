@@ -12,10 +12,6 @@ def load_params_from_file(filename):
     - JSON format (.json)
     - Python dict format (.txt or .py)
     
-    Special handling:
-    - If 'lmb' is present, automatically computes 'lam' = 10**lmb
-    - If neither 'lmb' nor 'lam' is present, lam will be set later (default from slider)
-    
     Parameters:
     -----------
     filename : str
@@ -50,14 +46,8 @@ def load_params_from_file(filename):
             content_clean = content_clean.replace('\n', '')
             params = eval(content_clean)
     
-    # Convert lmb to lam if present (for initialization, but slider will override)
-    if 'lmb' in params and 'lam' not in params:
-        params['lam'] = 10**params['lmb']
-    elif 'lmb' in params and 'lam' in params:
-        print(f"Warning: Both 'lmb' ({params['lmb']}) and 'lam' ({params['lam']}) found. Using 'lam'.")
-    
     # Ensure numeric types for all numeric parameters
-    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'PA', 'T_ism', 'lmb']
+    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'PA', 'T_ism']
     for key in numeric_keys:
         if key in params:
             params[key] = float(params[key])
@@ -79,10 +69,10 @@ def get_source_params(source_name, params_dir='.'):
     Returns:
     --------
     params : dict
-        Dictionary with parameters (lam may be None if not in file)
+        Dictionary with parameters
     """
     # Try different extensions
-    for ext in ['.txt', '.json', '.py']:
+    for ext in ['.txt', '.json', '.py', '.dat']:
         filename = Path(params_dir) / f"{source_name}{ext}"
         if filename.exists():
             return load_params_from_file(filename)
@@ -104,8 +94,6 @@ def validate_params(params):
     
     Optional parameters (can be set by sliders or defaults):
     - dist: float > 0 (default: 224.0 pc)
-    - lam: float (will be set by slider, default: 10**(-2.5))
-    - lmb: float (alternative to lam, will be converted)
     """
     # Required parameters (must be in file)
     required = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist']
@@ -139,11 +127,5 @@ def validate_params(params):
     if 'PA' not in params:
         params['PA'] = 90.
         print(f"Note: 'PA' not found in file. Using default: {params['PA']}°")
-    
-    # Set default initial lam (will be controlled by slider)
-    if 'lam' not in params and 'lmb' not in params:
-        params['lmb'] = -2.5
-        params['lam'] = 10**params['lmb']
-        print(f"Note: Neither 'lam' nor 'lmb' found. Using initial lmb = {params['lmb']} (lam = {params['lam']:.5f})")
     
     return params
