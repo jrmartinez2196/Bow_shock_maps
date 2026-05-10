@@ -10,7 +10,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from matplotlib.widgets import Slider, Button
+from matplotlib.widgets import Slider, Button, TextBox
 from matplotlib.colors import LogNorm
 from scipy.interpolate import interp1d
 from pathlib import Path
@@ -541,6 +541,7 @@ class BowShock:
         """Create sliders in a separate window"""
         self.fig_sliders = plt.figure(figsize=(12, 8))
         self.fig_sliders.suptitle('Bow Shock Parameters', fontsize=16)
+        self.textboxes = {}
         
         left_x = 0.15
         width = 0.7
@@ -557,14 +558,64 @@ class BowShock:
             ('inclination', 'Inclination [°]', (0, 90), self.inclination),
         ]
         
+    
         for i, (name, label, vrange, valinit) in enumerate(all_params):
-            ax = self.fig_sliders.add_axes([left_x, start_y - i*spacing, width, height])
+
+            y = start_y - i*spacing
+
+            # Slider axis
+            slider_ax = self.fig_sliders.add_axes([0.15, y, 0.55, 0.04])
+
+            # Textbox axis
+            text_ax = self.fig_sliders.add_axes([0.75, y, 0.12, 0.04])
+
+            # Create slider
             if name == 'T_ism':
-                slider = Slider(ax, label, vrange[0], vrange[1], valinit=valinit, valfmt='%.0f')
+                slider = Slider(
+                    slider_ax,
+                    label,
+                    vrange[0],
+                    vrange[1],
+                    valinit=valinit,
+                    valfmt='%.0f'
+                )
             else:
-                slider = Slider(ax, label, vrange[0], vrange[1], valinit=valinit, valfmt='%.4f')
+                slider = Slider(
+                    slider_ax,
+                    label,
+                    vrange[0],
+                    vrange[1],
+                    valinit=valinit,
+                    valfmt='%.4f'
+                )
+
+            # Create textbox
+            textbox = TextBox(
+                text_ax,
+                '',
+                initial=f'{valinit:.4g}'
+            )
+
+            # Slider updates plots
             slider.on_changed(self.update_all)
+
+            # Textbox -> slider
+            def submit(text, s=slider):
+                try:
+                    s.set_val(float(text))
+                except ValueError:
+                    pass
+
+            textbox.on_submit(submit)
+
+            # Slider -> textbox
+            def update_text(val, tb=textbox):
+                tb.set_val(f'{val:.4g}')
+
+            slider.on_changed(update_text)
+
             self.sliders[name] = slider
+            self.textboxes[name] = textbox
         
         ax_reset = self.fig_sliders.add_axes([0.4, 0.02, 0.2, 0.04])
         btn_reset = Button(ax_reset, 'Reset All')
