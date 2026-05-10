@@ -177,7 +177,6 @@ class BowShock:
         print(f"  n_ism = {self.n_ism:.2f} cm^-3")
         print(f"  T_ism = {self.T_ism:.2f} K")
         print(f"  inclination = {self.inclination:.1f} deg")
-        print("Initialization complete!")
 
     def get_continuum_bands(self):
         """Returns the available frequencies to compute free-free emission"""
@@ -707,6 +706,15 @@ class BowShock:
                         extent=extent,
                         cmap=cmap,
                         norm=norm
+                    )
+
+                    # contour leves
+                    ax.contour(
+                        maps['x'],
+                        maps['y'],
+                        I_data,
+                        levels=np.max(I_data) * np.array([0.01, 0.03, 0.1, 0.6]),
+                        colors='lime'
                     )
                     
                     self.images[key] = img_obj
