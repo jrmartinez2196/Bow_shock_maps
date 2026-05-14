@@ -3,9 +3,9 @@ import numpy as np
 from gaunt_factor import GauntFactor
 from constants import h, kB, sr_per_arcsec2, Rayleigh
 
-def emissivity_Halpha_sr(n, T):
+def emissivity_Halpha(n, T):
     """
-    H_alpha [erg s^-1 cm^-3 sr^-1]
+    H_alpha [R]
     Mackey+ 2013
     """
     n_arr = np.asarray(n, dtype=float)
@@ -20,9 +20,9 @@ def emissivity_Halpha_sr(n, T):
     return j_arcsec2/Rayleigh
 
 
-def emissivity_OIII_sr(n, T):
+def emissivity_OIII(n, T):
     """
-    [O III] λ5007 [erg s^-1 cm^-3 sr^-1]
+    [O III] λ5007 [erg s^-1 cm^-3 arcsec^-2]
     Osterbrock & Ferland 2006
     """
     n_arr = np.asarray(n, dtype=float)
@@ -47,14 +47,14 @@ def emissivity_OIII_sr(n, T):
     n2 = no_ion2 * n_arr * q12 / A21
     
     # Emissivity
-    j = (h * nu / (4 * np.pi)) * n2 * A21
+    j = (h * nu / (4 * np.pi)) * n2 * A21 / sr_per_arcsec2
     
     return j
 
 
-def emissivity_freefree_sr(n, T, Z, nu, gaunt_lookup):
+def emissivity_freefree(n, T, Z, nu, gaunt_lookup):
     """
-    Free-free emissivity [erg s^-1 cm^-3 sr^-1]
+    Free-free emissivity [erg s^-1 cm^-3 arcsec^-2]
     It uses a precomputed lookup table for the gaunt factors
     """
     n_arr = np.asarray(n, dtype=float)
@@ -67,8 +67,8 @@ def emissivity_freefree_sr(n, T, Z, nu, gaunt_lookup):
     # Emissivity calculation
     exp_factor = np.exp(-h * nu / (kB * T_arr))
     C_j = (6.8e-38 / (4 * np.pi)) * Z**2 * nu
-    j = C_j * n_arr**2 * exp_factor * gaunt / np.sqrt(T_arr)
-    j_mJy = j / (1e-26 * nu) / sr_per_arcsec2 # Radio plot mJy per arcsec^2
+    j = C_j * n_arr**2 * exp_factor * gaunt / np.sqrt(T_arr) / sr_per_arcsec2
+    j_mJy = j / (1e-26 * nu) # Radio mJy per arcsec^2
     
     return j, j_mJy
 
