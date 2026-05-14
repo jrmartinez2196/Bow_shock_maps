@@ -49,7 +49,7 @@ def get_norm(data):
     
     vmax = np.max(data)
     
-    vmin = vmax / 1000.
+    vmin = vmax / 500.
     
     return LogNorm(vmin=vmin, vmax=1.1*vmax)
 
@@ -120,9 +120,9 @@ class BowShock:
         
         # Visualization parameters
         self.zmax = self.params.get('zmax', 5e15)
-        self.nz = self.params.get('nz', 150)
-        self.nx = self.params.get('nx', 300)
-        self.ny = self.params.get('ny', 300)
+        self.nz = self.params.get('nz', 50)
+        self.nx = self.params.get('nx', 400)
+        self.ny = self.params.get('ny', 400)
         self.xlim_factor = self.params.get('xlim_factor', 10.0)
         self.ylim_factor = self.params.get('ylim_factor', 10.0)
         
@@ -296,7 +296,7 @@ class BowShock:
         lam = self.lam
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
 
-        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(self.inclination*np.pi/180.), self.distance):.1f} ''")
+        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(np.deg2rad(self.inclination)), self.distance):.1f} ''")
         
         thr, rr_norm = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=np.pi)
         
@@ -364,16 +364,17 @@ class BowShock:
         R0_phys = self.update_R0()
         alpha = self.alpha
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
-        
-        xlim = 5.*self.xlim_factor * R0_corrected
-        ylim = 5.*self.ylim_factor * R0_corrected
         inclination_rad = np.deg2rad(90 - self.inclination)
         zmax = max(self.zmax, 5 * R0_corrected)
         
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps_fast(
-            xlim, ylim, self.nx, self.ny, self.R_RS_func,
+            xmin = -4.*R0_phys, xmax  = 4.*R0_phys,
+            ymin = -5*R0_phys, ymax = 3.*R0_phys,
+            nx = self.nx, ny = self.ny,
+            R_RS_func = self.R_RS_func,
             inclination=inclination_rad, PA = self.PA,
             zmax=zmax, nz=self.nz,
+            fwhm_x=10.5, fwhm_y=20.2, f_ny = 0.7,
             lmb=self.lmb, R0_phys=R0_corrected,
             T_IL=self.T_IL,
             Vstar=self.Vstar, n_ism=self.n_ism,
@@ -730,20 +731,28 @@ class BowShock:
             x0 = 0.0
             y0 = 0.0
 
-            # Map limits
-            xmap_min = np.min(maps['x'])
-            xmap_max = np.max(maps['x'])
+            # map limits before rotation. Minimize blank regions
+            xmin_bs = -1.0 * arcsecond(R0_corrected, self.distance)
+            xmax_bs =  4.0 * arcsecond(R0_corrected, self.distance)
+            ymin_bs = -2.5 * arcsecond(R0_corrected, self.distance)
+            ymax_bs =  2.5 * arcsecond(R0_corrected, self.distance)
 
-            ymap_min = np.min(maps['y'])
-            ymap_max = np.max(maps['y'])
+            # Corners (before rotation)
+            corners = np.array([
+                [xmin_bs, ymin_bs],
+                [xmin_bs, ymax_bs],
+                [xmax_bs, ymin_bs],
+                [xmax_bs, ymax_bs]
+            ])
 
-            zoom_factor = 10.0
+            x_rot = corners[:,0]*np.cos(PA_rot) - corners[:,1]*np.sin(PA_rot)
+            y_rot = corners[:,0]*np.sin(PA_rot) + corners[:,1]*np.cos(PA_rot)
 
-            xmin = -zoom_factor * arcsecond(R0_corrected, self.distance)
-            xmax =  zoom_factor * arcsecond(R0_corrected, self.distance)
-
-            ymin = -zoom_factor * arcsecond(R0_corrected, self.distance)
-            ymax =  zoom_factor * arcsecond(R0_corrected, self.distance)
+            # map limits after rotation
+            xmin = np.min(x_rot)
+            xmax = np.max(x_rot)
+            ymin = np.min(y_rot)
+            ymax = np.max(y_rot)
 
             # Emission maps
             data_list = [I_Halpha, I_OIII, I_ff]
@@ -770,11 +779,11 @@ class BowShock:
                     self.images[key] = img_obj
 
                     if key == 'ff' and self.band_name == 'radio':
-                        cbar_label = r'Surface brightness [mJy arcsec$^{-2}$]'
+                        cbar_label = r'Surface brightness [mJy beam$^{-1}$]'
                     elif key == 'Halpha':
                         cbar_label = r'Surface brightness [R]'
                     else:
-                        cbar_label = r'Surface brightness [erg s$^{-1}$ cm$^{-2}$ sr$^{-1}$]'
+                        cbar_label = r'Surface brightness [erg s$^{-1}$ cm$^{-2}$ arcsec$^{-2}$]'
 
                     self.colorbars[key] = plt.colorbar(
                         img_obj,
@@ -796,7 +805,7 @@ class BowShock:
                     maps['x'],
                     maps['y'],
                     I_data,
-                    levels=np.max(I_data) * np.array([0.01, 0.1, 0.5]),
+                    levels=np.max(I_data) * np.array([0.05, 0.1, 0.5]),
                     colors='lime'
                 )
 

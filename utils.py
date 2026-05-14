@@ -4,13 +4,14 @@
 
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
+from scipy.ndimage import gaussian_filter
 from constants import AU, mu, mp, mu_sh
 from bow_shock_surface import integrate_r_theta_christie
 from thermodynamics import (
     vnorm_wind, vnorm_forward, vtan, 
     post_shock_conditions
 )
-from radiation import emissivity_Halpha_sr, emissivity_OIII_sr, emissivity_freefree_sr
+from radiation import emissivity_Halpha, emissivity_OIII, emissivity_freefree
 from radiation import precompute_gaunt_for_temperatures
 
 def arcsecond(R, d):
@@ -149,9 +150,10 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=1e4, *
     return props
 
 
-def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
+def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
                               inclination=0.0, PA = 0.,
                               zmax=5e15, nz=75,
+                              fwhm_x = 1.0, fwhm_y = 1.0, f_ny=0.7,
                               lmb=0.0, R0_phys=1.0,
                               rs_radiative=None, fs_radiative=None,
                               T_IL=1e4,
@@ -179,6 +181,10 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
         Maximum LOS extent [cm]
     nz : int
         Number of LOS integration steps
+    fwhm_x, fwhm_y : float
+        beam size [arcsec]
+    f_ny : float
+        Nyquist frequency
     lmb : float
         log10(lambda) parameter
     R0_phys : float
@@ -226,8 +232,8 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
     )
     
     # Generate 2D coordinate grid
-    x_vals = np.linspace(-xlim, xlim, nx)
-    y_vals = np.linspace(-ylim, ylim, ny)
+    x_vals = np.linspace(xmin, xmax, nx)
+    y_vals = np.linspace(ymin, ymax, ny)
     X, Y = np.meshgrid(x_vals, y_vals)
 
 
@@ -248,6 +254,16 @@ def make_projection_maps_fast(xlim, ylim, nx, ny, R_RS_func,
         lmb=lmb, R0_phys=R0_phys,
         rs_props=rs_props, fs_props=fs_props,
         nu_ff=nu_ff
+    )
+
+    # Instrumental convolution
+    result = convolution(
+        result,
+        x_vals_arcsec,
+        y_vals_arcsec,
+        fwhm_x=fwhm_x,
+        fwhm_y=fwhm_y,
+        f_ny=f_ny
     )
     
     return x_vals_arcsec, y_vals_arcsec, result
@@ -373,19 +389,19 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         # Hot layer:
         inside_hot_rs = (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :])
         
-        I_Halpha += emissivity_Halpha_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
-        I_OIII += emissivity_OIII_sr(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
+        I_Halpha += emissivity_Halpha(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
+        I_OIII += emissivity_OIII(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
 
-        j_ff, j_ff_mJy = emissivity_freefree_sr(n_RH_RS[i, :], T_RH_RS[i, :], Z_q, nu_ff, gaunt_lookup)
+        j_ff, j_ff_mJy = emissivity_freefree(n_RH_RS[i, :], T_RH_RS[i, :], Z_q, nu_ff, gaunt_lookup)
         I_ff_total += j_ff * inside_hot_rs * dz
         I_ff_mJy += j_ff_mJy * inside_hot_rs * dz
         
         # Cold layer RS: only if radiative (H_cold > 0)
         if np.any(H_RS_cold[i, :] > 0):
             inside_cold_rs = (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0)
-            I_Halpha += emissivity_Halpha_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            I_OIII += emissivity_OIII_sr(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            j_ff, j_ff_mJy = emissivity_freefree_sr(n_IL_RS[i, :], T_IL_RS[i, :], Z_q, nu_ff, gaunt_lookup)
+            I_Halpha += emissivity_Halpha(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
+            I_OIII += emissivity_OIII(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
+            j_ff, j_ff_mJy = emissivity_freefree(n_IL_RS[i, :], T_IL_RS[i, :], Z_q, nu_ff, gaunt_lookup)
             I_ff_total += j_ff * inside_cold_rs * dz
             I_ff_mJy += j_ff_mJy * inside_cold_rs * dz
         
@@ -393,9 +409,9 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         # Cold layer FS: only if radiative
         if np.any(H_FS_cold[i, :] > 0):
             inside_cold_fs = (r_i >= CD_pos_i) & (r_i <= CD_pos_i + H_FS_cold[i, :]) & (H_FS_cold[i, :] > 0)
-            I_Halpha += emissivity_Halpha_sr(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
-            I_OIII += emissivity_OIII_sr(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
-            j_ff, j_ff_mJy = emissivity_freefree_sr(n_IL_FS[i, :], T_IL_FS[i, :], Z_q, nu_ff, gaunt_lookup)
+            I_Halpha += emissivity_Halpha(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
+            I_OIII += emissivity_OIII(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
+            j_ff, j_ff_mJy = emissivity_freefree(n_IL_FS[i, :], T_IL_FS[i, :], Z_q, nu_ff, gaunt_lookup)
             I_ff_total += j_ff * inside_cold_fs * dz
             I_ff_mJy += j_ff_mJy * inside_cold_fs * dz
         
@@ -405,9 +421,9 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         hot_start = CD_pos_i + H_FS_cold[i, :]
         inside_hot_fs = (r_i >= hot_start) & (r_i <= FS_pos_i)
         
-        I_Halpha += emissivity_Halpha_sr(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
-        I_OIII += emissivity_OIII_sr(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
-        j_ff, j_ff_mJy = emissivity_freefree_sr(n_RH_FS[i, :], T_RH_FS[i, :], Z_q, nu_ff, gaunt_lookup)
+        I_Halpha += emissivity_Halpha(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
+        I_OIII += emissivity_OIII(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
+        j_ff, j_ff_mJy = emissivity_freefree(n_RH_FS[i, :], T_RH_FS[i, :], Z_q, nu_ff, gaunt_lookup)
         I_ff_total += j_ff * inside_hot_fs * dz
         I_ff_mJy += j_ff_mJy * inside_hot_fs * dz
     
@@ -420,6 +436,83 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     }
     
     return result
+
+
+def convolution(result, x_vals_arcsec, y_vals_arcsec,
+                fwhm_x, fwhm_y,
+                f_ny=0.7):
+    """
+    Convolve maps with a Gaussian instrumental beam.
+
+    Parameters
+    ----------
+    result : dict
+        Dictionary with 2D emission maps pre convolution
+    x_vals_arcsec, y_vals_arcsec : arrays
+        Coordinate axes [arcsec]
+    fwhm_x, fwhm_y : float
+        Beam size [arcsec]
+    f_ny : float
+        Nyquist frequency
+
+    Returns
+    -------
+    result_conv : dict
+        Convolved maps.
+        Keys: I_process
+        Values: convolved maps; 2D matrices
+    """
+
+    # Pixel size [arcsec/pixel]
+    dx = np.abs(x_vals_arcsec[1] - x_vals_arcsec[0])
+    dy = np.abs(y_vals_arcsec[1] - y_vals_arcsec[0])
+    
+    # Convert FWHM to sigma
+    sigma_x = fwhm_to_sigma(fwhm_x)
+    sigma_y = fwhm_to_sigma(fwhm_y)
+
+    if (dx > sigma_x):
+        raise ValueError(f'Map resolution is to low! dx = {dx:.1f}, sigma_x = {sigma_x:.1f}')
+    elif (dy > sigma_y):
+        raise ValueError(f'Map resolution is to low! dy = {dy:.1f}, sigma_y = {sigma_y:.1f}')
+
+    # Convert beam size to pixels
+    sigma_x_pix = sigma_x / dx
+    sigma_y_pix = sigma_y / dy
+
+    result_conv = {}
+
+    # loop through dicts
+    # image -> 2D matrix
+    for key, image in result.items():
+
+        conv = gaussian_filter(image,sigma=(sigma_y_pix, sigma_x_pix))
+
+        # Convert radio map to mJy/beam
+        if key == 'I_ff_mJy':
+            A_beam = 2.0 * np.pi * sigma_x * sigma_y  # [arcsec^2]
+            conv *= A_beam
+
+        result_conv[key] = conv
+
+    return result_conv
+
+
+def fwhm_to_sigma(fwhm):
+    """
+    Converts FWHM to sigma.
+
+    Parameter:
+    ----------
+    fwhm : float
+
+    Returns:
+    --------
+    sigma : float
+    """
+    sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
+    return sigma
+    
 
 def radial_profile(x_vals, y_vals, image, dX=0.0, nbins=33, r_min=0., r_max=200.):
     """
