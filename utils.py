@@ -209,7 +209,7 @@ def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
         'cold', 'hot', or 'fixed'
     wind_T_fixed : float or None
         Fixed wind temperature for 'fixed' regime [K]
-    R_stromgren : 'float'
+    R_stromgren : float
         Stromgren radius [cm]
     nu_ff : float
         Frequency for free-free emission [Hz]
@@ -311,7 +311,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         log10(lambda) parameter
     R0_phys : float
         Physical standoff radius [cm]
-    R_stromgren : 'float'
+    R_stromgren : float
         Stromgren radius [cm]
     rs_props, fs_props : dict
         Precomputed shock properties from precompute_shock_properties
@@ -397,8 +397,8 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
 
         r_i = r[i, :]
 
-        inside_stromgren = r_i < R_stromgren    # Total ionization
-        outside_stromgren = ~inside_stromgren   # Partial ionization
+        inside_stromgren = r_i <= R_stromgren    # Total ionization
+        outside_stromgren = r_i > R_stromgren   # Partial ionization
 
         R_RS_i = R_RS[i, :]
         CD_pos_i = CD_pos[i, :]
