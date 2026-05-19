@@ -3,6 +3,7 @@ import json
 import ast
 import numpy as np
 from pathlib import Path
+from constants import pc
 
 def load_params_from_file(filename):
     """
@@ -47,7 +48,7 @@ def load_params_from_file(filename):
             params = eval(content_clean)
     
     # Ensure numeric types for all numeric parameters
-    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'PA', 'T_ism']
+    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'PA', 'T_ism', 'R_str']
     for key in numeric_keys:
         if key in params:
             params[key] = float(params[key])
@@ -123,9 +124,14 @@ def validate_params(params):
         params['inclination'] = 60.
         print(f"Note: 'inclination' not found in file. Using default: {params['inclination']}°")
 
-     # Set default for PA if not present
+    # Set default for PA if not present
     if 'PA' not in params:
         params['PA'] = 90.
         print(f"Note: 'PA' not found in file. Using default: {params['PA']}°")
+
+    # Set default for R_str if not present
+    if 'R_str' not in params:
+        params['R_str'] = 0.1*pc
+        print(f"Note: 'R_str' not found in file. Using default: {params['R_str']} cm")
     
     return params

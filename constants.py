@@ -8,6 +8,7 @@ kB = 1.380649e-16           # Boltzmann constant [erg/K]
 me = 9.1093837e-28          # electron mass
 c = 2.99792458e10           # speed of light
 G = 6.67430e-8              # Gravitational constant
+eV = 1.602176e-12
 sigma_T = 6.6524587e-25     # Thomson cross section
 Ry = 2.179872e-11  			# Rydberg constant [erg]
 h = 6.6260755e-27			# Planck constant

@@ -5,14 +5,19 @@
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
 from scipy.ndimage import gaussian_filter
-from constants import AU, mu, mp, mu_sh
+from constants import AU, mu, mp, mu_sh, kB, eV
 from bow_shock_surface import integrate_r_theta_christie
 from thermodynamics import (
     vnorm_wind, vnorm_forward, vtan, 
     post_shock_conditions
 )
+from ionization import IonizationTable
 from radiation import emissivity_Halpha, emissivity_OIII, emissivity_freefree
 from radiation import precompute_gaunt_for_temperatures
+
+from matplotlib.colors import LogNorm
+
+ion_table = IonizationTable("ionization_table.dat")
 
 def arcsecond(R, d):
     """
@@ -159,6 +164,7 @@ def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
                               T_IL=1e4,
                               Vstar=None, n_ism=None, Mdot=None, Vw=None,
                               wind_regime='hot', wind_T_fixed=None,
+                              R_stromgren=3.086e17,
                               nu_ff=2e6*1e9,
                               distance=224.0):
     """
@@ -203,6 +209,8 @@ def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
         'cold', 'hot', or 'fixed'
     wind_T_fixed : float or None
         Fixed wind temperature for 'fixed' regime [K]
+    R_stromgren : 'float'
+        Stromgren radius [cm]
     nu_ff : float
         Frequency for free-free emission [Hz]
     distance : float
@@ -252,6 +260,7 @@ def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
         X_rot, Y_rot, R_RS_func, inclination=inclination,
         zmax=zmax, nz=nz,
         lmb=lmb, R0_phys=R0_phys,
+        R_stromgren=R_stromgren,
         rs_props=rs_props, fs_props=fs_props,
         nu_ff=nu_ff
     )
@@ -272,6 +281,7 @@ def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
 def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
                                zmax=5e15, nz=500, 
                                lmb=0.0, R0_phys=1.0,
+                               R_stromgren=3.086e17,
                                rs_props=None, fs_props=None,
                                nu_ff=2e6*1e9):
     """
@@ -301,6 +311,8 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         log10(lambda) parameter
     R0_phys : float
         Physical standoff radius [cm]
+    R_stromgren : 'float'
+        Stromgren radius [cm]
     rs_props, fs_props : dict
         Precomputed shock properties from precompute_shock_properties
     nu_ff : float
@@ -312,7 +324,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         Integrated intensities: I_Halpha, I_OIII, I_ff_total
     """
 
-    # Precompute gaunt factors for faster calculation of f-f emission
+    # Precompute gaunt factors
     Z_q = 1.0
     gaunt_lookup = precompute_gaunt_for_temperatures(nu_ff, Z=Z_q)
 
@@ -323,11 +335,11 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     z = np.linspace(-zmax, zmax, nz)
     dz = z[1] - z[0]
     
-    x_flat = x.ravel()[None, :]  # shape (1, n_pixels)
+    x_flat = x.ravel()[None, :]
     y_flat = y.ravel()[None, :]
-    z_grid = z[:, None]  # shape (nz, 1)
+    z_grid = z[:, None]
     
-    # Rotate coordinates about y-axis
+    # Rotate coordinates
     X = ci * x_flat + si * z_grid
     Y = y_flat
     Z = -si * x_flat + ci * z_grid
@@ -336,13 +348,13 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
     r = np.sqrt(X**2 + Y**2 + Z**2)
     theta = np.arccos(np.clip(Z / np.where(r == 0, 1, r), -1, 1))
     
-    # Reverse shock radius at each (z, pixel)
-    R_RS = R_RS_func(theta)  # shape (nz, n_pixels)
+    # Reverse shock radius
+    R_RS = R_RS_func(theta) * R0_phys
     
     shape_2d = y.shape
     n_pixels = shape_2d[0] * shape_2d[1]
     
-    # Initialize integrated intensities
+    # Output maps
     I_Halpha = np.zeros(n_pixels)
     I_OIII = np.zeros(n_pixels)
     I_ff_total = np.zeros(n_pixels)
@@ -350,91 +362,145 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
 
     theta_flat = theta.ravel()
     
-    # --- RS properties
+    # =========================
+    # RS PROPERTIES
+
     H_RS_hot = rs_props['H_hot'](theta_flat).reshape(theta.shape)
     H_RS_cold = rs_props['H_cold'](theta_flat).reshape(theta.shape)
     
     n_RH_RS = rs_props['n_RH'](theta_flat).reshape(theta.shape)
     T_RH_RS = rs_props['T_RH'](theta_flat).reshape(theta.shape)
-    
-    # Cold layer
+
     n_IL_RS = rs_props['n_IL'](theta_flat).reshape(theta.shape)
     T_IL_RS = rs_props['T_IL_arr'](theta_flat).reshape(theta.shape)
-    
-    # --- FS properties
+
+    # =========================
+    # FS PROPERTIES
+
     H_FS_cold = fs_props['H_cold'](theta_flat).reshape(theta.shape)
     H_FS_hot = fs_props['H_hot'](theta_flat).reshape(theta.shape)
     
     n_RH_FS = fs_props['n_RH'](theta_flat).reshape(theta.shape)
     T_RH_FS = fs_props['T_RH'](theta_flat).reshape(theta.shape)
-    
-    # Cold layer
+
     n_IL_FS = fs_props['n_IL'](theta_flat).reshape(theta.shape)
     T_IL_FS = fs_props['T_IL_arr'](theta_flat).reshape(theta.shape)
-    
-    # Contact discontinuity position
+
+    # CD and FS positions
     CD_pos = R_RS + H_RS_hot + H_RS_cold
-    
-    # Forward shock position
     FS_pos = CD_pos + H_FS_cold + H_FS_hot
-    
-    # LOS integration
+
+    # =========================
+    # LOS INTEGRATION
+
     for i in range(nz):
+
         r_i = r[i, :]
+
+        inside_stromgren = r_i < R_stromgren    # Total ionization
+        outside_stromgren = ~inside_stromgren   # Partial ionization
+
         R_RS_i = R_RS[i, :]
         CD_pos_i = CD_pos[i, :]
         FS_pos_i = FS_pos[i, :]
-        
-        # ========== REVERSE SHOCK (RS) ==========
-        # Hot layer:
-        inside_hot_rs = (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :])
-        
-        I_Halpha += emissivity_Halpha(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
-        I_OIII += emissivity_OIII(n_RH_RS[i, :], T_RH_RS[i, :]) * inside_hot_rs * dz
 
-        j_ff, j_ff_mJy = emissivity_freefree(n_RH_RS[i, :], T_RH_RS[i, :], Z_q, nu_ff, gaunt_lookup)
+        # ==========================================================
+        # RS - Hot post shock layer
+        # ==========================================================
+
+        inside_hot_rs = ( (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :]) )
+
+        ion_H = np.ones_like(r_i)   # Ionization fractions; initialize assuming full ionization as inside the Stromgren sphere
+        ion_O = np.ones_like(r_i)
+
+        # Compute only for positions r_i > R_str
+        ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(T_RH_RS[i, outside_stromgren]) # In terms of the temperature considering CIE if outside R_str
+
+        I_Halpha += emissivity_Halpha(n_RH_RS[i, :], T_RH_RS[i, :] , ion_H=ion_H) * inside_hot_rs * dz
+
+        I_OIII += emissivity_OIII(n_RH_RS[i, :], T_RH_RS[i, :], ion_H=ion_H, ion_O=ion_O) * inside_hot_rs * dz
+
+        j_ff, j_ff_mJy = emissivity_freefree(n_RH_RS[i, :], T_RH_RS[i, :], ion_H=ion_H, Z_q=Z_q, nu=nu_ff, gaunt_lookup=gaunt_lookup)
+
         I_ff_total += j_ff * inside_hot_rs * dz
         I_ff_mJy += j_ff_mJy * inside_hot_rs * dz
-        
-        # Cold layer RS: only if radiative (H_cold > 0)
+
+        # ==========================================================
+        # RS - cold post cooling layer (T_IL might be different????)
+        # ==========================================================
+
         if np.any(H_RS_cold[i, :] > 0):
-            inside_cold_rs = (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0)
-            I_Halpha += emissivity_Halpha(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            I_OIII += emissivity_OIII(n_IL_RS[i, :], T_IL_RS[i, :]) * inside_cold_rs * dz
-            j_ff, j_ff_mJy = emissivity_freefree(n_IL_RS[i, :], T_IL_RS[i, :], Z_q, nu_ff, gaunt_lookup)
+
+            inside_cold_rs = ( (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0) )
+
+            ion_H = np.ones_like(r_i)
+            ion_O = np.ones_like(r_i)
+
+            ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(T_IL_RS[i, outside_stromgren])
+            I_Halpha += emissivity_Halpha(n_IL_RS[i, :], T_IL_RS[i, :], ion_H=ion_H) * inside_cold_rs * dz
+            I_OIII += emissivity_OIII(n_IL_RS[i, :], T_IL_RS[i, :], ion_H=ion_H, ion_O=ion_O) * inside_cold_rs * dz
+
+            j_ff, j_ff_mJy = emissivity_freefree(n_IL_RS[i, :], T_IL_RS[i, :], ion_H=ion_H, Z_q=Z_q, nu=nu_ff, gaunt_lookup=gaunt_lookup)
+
             I_ff_total += j_ff * inside_cold_rs * dz
             I_ff_mJy += j_ff_mJy * inside_cold_rs * dz
-        
-        # ========== FORWARD SHOCK (FS) ==========
-        # Cold layer FS: only if radiative
+
+        # ==========================================================
+        # FORWARD SHOCK - cold post cooling layer (T_IL might be T_ISM if outside R_str????)
+        # ==========================================================
+
         if np.any(H_FS_cold[i, :] > 0):
-            inside_cold_fs = (r_i >= CD_pos_i) & (r_i <= CD_pos_i + H_FS_cold[i, :]) & (H_FS_cold[i, :] > 0)
-            I_Halpha += emissivity_Halpha(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
-            I_OIII += emissivity_OIII(n_IL_FS[i, :], T_IL_FS[i, :]) * inside_cold_fs * dz
-            j_ff, j_ff_mJy = emissivity_freefree(n_IL_FS[i, :], T_IL_FS[i, :], Z_q, nu_ff, gaunt_lookup)
+
+            inside_cold_fs = ( (r_i >= CD_pos_i) & (r_i <= CD_pos_i + H_FS_cold[i, :]) & (H_FS_cold[i, :] > 0) )
+
+            ion_H = np.ones_like(r_i)
+            ion_O = np.ones_like(r_i)
+
+            ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(T_IL_FS[i, outside_stromgren])
+
+            I_Halpha += emissivity_Halpha(n_IL_FS[i, :],T_IL_FS[i, :], ion_H=ion_H) * inside_cold_fs * dz
+
+            I_OIII += emissivity_OIII(n_IL_FS[i, :],T_IL_FS[i, :], ion_H=ion_H, ion_O=ion_O) * inside_cold_fs * dz
+
+            j_ff, j_ff_mJy = emissivity_freefree(n_IL_FS[i, :], T_IL_FS[i, :], ion_H=ion_H, Z_q=Z_q, nu=nu_ff,gaunt_lookup=gaunt_lookup)
+
             I_ff_total += j_ff * inside_cold_fs * dz
             I_ff_mJy += j_ff_mJy * inside_cold_fs * dz
-        
-        # Hot layer FS
-        # If adiabatic: hot_start = CD_pos (since H_FS_cold = 0)
-        # If radiative: hot_start = CD_pos + H_FS_cold
+
+        # ==========================================================
+        # FS - Hot post shock layer
+        # ==========================================================
+
         hot_start = CD_pos_i + H_FS_cold[i, :]
-        inside_hot_fs = (r_i >= hot_start) & (r_i <= FS_pos_i)
-        
-        I_Halpha += emissivity_Halpha(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
-        I_OIII += emissivity_OIII(n_RH_FS[i, :], T_RH_FS[i, :]) * inside_hot_fs * dz
-        j_ff, j_ff_mJy = emissivity_freefree(n_RH_FS[i, :], T_RH_FS[i, :], Z_q, nu_ff, gaunt_lookup)
+
+        inside_hot_fs = ( (r_i >= hot_start) & (r_i <= FS_pos_i) )
+
+        ion_H = np.ones_like(r_i)
+        ion_O = np.ones_like(r_i)
+
+        ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(T_RH_FS[i, outside_stromgren])
+
+        I_Halpha += emissivity_Halpha(n_RH_FS[i, :], T_RH_FS[i, :], ion_H=ion_H) * inside_hot_fs * dz
+
+        I_OIII += emissivity_OIII(n_RH_FS[i, :], T_RH_FS[i, :], ion_H=ion_H, ion_O=ion_O) * inside_hot_fs * dz
+
+        j_ff, j_ff_mJy = emissivity_freefree(n_RH_FS[i, :],T_RH_FS[i, :], ion_H=ion_H, Z_q=Z_q, nu=nu_ff,
+            gaunt_lookup=gaunt_lookup)
+
         I_ff_total += j_ff * inside_hot_fs * dz
         I_ff_mJy += j_ff_mJy * inside_hot_fs * dz
-    
-    # Reshape to 2D
+
+    # =========================
+    # RESHAPE
+    # =========================
+
     result = {
         'I_Halpha': I_Halpha.reshape(shape_2d),
         'I_OIII': I_OIII.reshape(shape_2d),
         'I_ff_total': I_ff_total.reshape(shape_2d),
         'I_ff_mJy': I_ff_mJy.reshape(shape_2d)
     }
-    
+
     return result
 
 
@@ -512,6 +578,14 @@ def fwhm_to_sigma(fwhm):
     """
     sigma = fwhm / (2.0 * np.sqrt(2.0 * np.log(2.0)))
     return sigma
+
+
+def ionization_fraction(T):
+    """
+    Ionization fractions from ionization_table.dat
+    """
+
+    return ion_table.fractions(T)
     
 
 def radial_profile(x_vals, y_vals, image, dX=0.0, nbins=33, r_min=0., r_max=200.):

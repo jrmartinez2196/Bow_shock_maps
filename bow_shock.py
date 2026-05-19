@@ -32,7 +32,7 @@ from thermodynamics import (
 from utils import (
     make_projection_maps_fast,
     radial_profile,
-    arcsecond
+    arcsecond,
 )
 
 def sanitize_log_data(data):
@@ -117,12 +117,15 @@ class BowShock:
         # Wind regime
         self.wind_regime = self.params.get('wind_regime', 'hot')
         self.wind_T_fixed = self.params.get('wind_T_fixed', None)
+
+        # Stromgren sphere radius in terms of R0
+        self.r0_str = self.params.get('R_str')
         
         # Visualization parameters
         self.zmax = self.params.get('zmax', 5e15)
-        self.nz = self.params.get('nz', 50)
-        self.nx = self.params.get('nx', 400)
-        self.ny = self.params.get('ny', 400)
+        self.nz = self.params.get('nz', 400)
+        self.nx = self.params.get('nx', 200)
+        self.ny = self.params.get('ny', 200)
         self.xlim_factor = self.params.get('xlim_factor', 10.0)
         self.ylim_factor = self.params.get('ylim_factor', 10.0)
         
@@ -164,11 +167,6 @@ class BowShock:
         # Load initial R_RS function
         print("Loading R_RS function...")
         self.update_R_RS_func()
-        
-        # Calculate R0 for verification
-        R0_test = self.update_R0()
-        print(f"R0 = {R0_test/AU:.1f} AU")
-        #print(f"Projected stagnation point distance = {arcsecond(R0_test*np.cos(self.inclination*np.pi/180.), self.distance)} ''")
         
         print(f"Loaded parameters for {source_name}")
         print(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
@@ -257,6 +255,7 @@ class BowShock:
         self.Vstar = self.sliders['Vstar'].val * 1e5 # km/s -> cm/s
         self.n_ism = self.sliders['n_ism'].val
         self.T_ism = self.sliders['T_ism'].val
+        self.r0_str = self.sliders['r0_str'].val
         self.inclination = self.sliders['inclination'].val
         
         self.update_lam_from_T_ism()
@@ -364,22 +363,43 @@ class BowShock:
         R0_phys = self.update_R0()
         alpha = self.alpha
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
+        R_str = self.r0_str * R0_corrected           # Stromgren sphere radius
         inclination_rad = np.deg2rad(90 - self.inclination)
         zmax = max(self.zmax, 5 * R0_corrected)
         
+        #x_vals_arcsec, y_vals_arcsec, result = make_projection_maps_fast(
+        #    xmin = -4.*R0_phys, xmax  = 4.*R0_phys,
+        #    ymin = -5*R0_phys, ymax = 3.*R0_phys,
+        #    nx = self.nx, ny = self.ny,
+        #    R_RS_func = self.R_RS_func,
+        #    inclination=inclination_rad, PA = self.PA,
+        #    zmax=zmax, nz=self.nz,
+            #fwhm_x=10.5, fwhm_y=20.2, f_ny = 0.7,
+        #    fwhm_x=25., fwhm_y=25., f_ny = 0.7,
+        #    lmb=self.lmb, R0_phys=R0_corrected,
+        #    T_IL=self.T_IL,
+        #    Vstar=self.Vstar, n_ism=self.n_ism,
+        #    Mdot=self.Mdot, Vw=self.Vw,
+        #    wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
+        #    R_stromgren=R_str,
+        #    nu_ff=self.nu_ff,
+        #    distance=self.distance
+        #)
+
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps_fast(
-            xmin = -4.*R0_phys, xmax  = 4.*R0_phys,
-            ymin = -5*R0_phys, ymax = 3.*R0_phys,
+            xmin = -10.*R0_phys, xmax  = 10.*R0_phys,
+            ymin = -10*R0_phys, ymax = 10.*R0_phys,
             nx = self.nx, ny = self.ny,
             R_RS_func = self.R_RS_func,
             inclination=inclination_rad, PA = self.PA,
             zmax=zmax, nz=self.nz,
-            fwhm_x=10.5, fwhm_y=20.2, f_ny = 0.7,
+            fwhm_x=10., fwhm_y=10., f_ny = 0.7,
             lmb=self.lmb, R0_phys=R0_corrected,
             T_IL=self.T_IL,
             Vstar=self.Vstar, n_ism=self.n_ism,
             Mdot=self.Mdot, Vw=self.Vw,
             wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
+            R_stromgren=R_str,
             nu_ff=self.nu_ff,
             distance=self.distance
         )
@@ -556,6 +576,7 @@ class BowShock:
             ('Vstar', 'Vstar [km/s]', (10, 500), self.Vstar/1e5),
             ('n_ism', 'n_ISM [cm⁻³]', (0.01, 10.0), self.n_ism),
             ('T_ism', 'T_ISM [K]', (100, 1.e6), self.T_ism),
+            ('r0_str', 'R_str/R0', (0.9, 10.), self.r0_str),
             ('inclination', 'Inclination [°]', (0, 90), self.inclination),
         ]
         
@@ -632,6 +653,7 @@ class BowShock:
         self.Vstar = 128.5 * 1e5
         self.n_ism = 0.2
         self.T_ism = 8000.0
+        self.r0_str = 1.6
         self.inclination = 75.0
         
         for name, slider in self.sliders.items():
@@ -715,6 +737,8 @@ class BowShock:
             # Taking into account ISM thermal pressure
             R0_corrected = R0_phys / np.sqrt(1 + self.alpha)
 
+            R_str = self.r0_str * R0_corrected
+
             inc = np.deg2rad(self.inclination)
 
             # Star translation from the origin
@@ -732,10 +756,15 @@ class BowShock:
             y0 = 0.0
 
             # map limits before rotation. Minimize blank regions
-            xmin_bs = -1.0 * arcsecond(R0_corrected, self.distance)
-            xmax_bs =  4.0 * arcsecond(R0_corrected, self.distance)
-            ymin_bs = -2.5 * arcsecond(R0_corrected, self.distance)
-            ymax_bs =  2.5 * arcsecond(R0_corrected, self.distance)
+            #xmin_bs = -2.0 * arcsecond(R0_corrected, self.distance)
+            #xmax_bs =  4.0 * arcsecond(R0_corrected, self.distance)
+            #ymin_bs = -3. * arcsecond(R0_corrected, self.distance)
+            #ymax_bs =  3. * arcsecond(R0_corrected, self.distance)
+
+            xmin_bs = -5. * arcsecond(R0_corrected, self.distance)
+            xmax_bs =  5.0 * arcsecond(R0_corrected, self.distance)
+            ymin_bs = -5. * arcsecond(R0_corrected, self.distance)
+            ymax_bs =  5. * arcsecond(R0_corrected, self.distance)
 
             # Corners (before rotation)
             corners = np.array([

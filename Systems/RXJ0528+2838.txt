@@ -6,5 +6,6 @@
 	'dist' : 224.2,	
 	'inclination' : 75.,
 	'PA' : 126.5,
-	'T_ism' : 8.e3
+	'T_ism' : 8.e3,
+	'R_str' : 3.
 }

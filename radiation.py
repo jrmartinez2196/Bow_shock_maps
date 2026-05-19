@@ -3,7 +3,7 @@ import numpy as np
 from gaunt_factor import GauntFactor
 from constants import h, kB, sr_per_arcsec2, Rayleigh
 
-def emissivity_Halpha(n, T):
+def emissivity_Halpha(n, T, ion_H=1.):
     """
     H_alpha [R]
     Mackey+ 2013
@@ -15,12 +15,12 @@ def emissivity_Halpha(n, T):
     n_arr = np.maximum(n_arr, 0.0)
     T_arr = np.maximum(T_arr, 1e4)
     
-    j_arcsec2 = 2.85e-33 * T_arr**-0.9 * n_arr**2
+    j_arcsec2 = 2.85e-33 * T_arr**-0.9 * (ion_H*n_arr)**2
 
     return j_arcsec2/Rayleigh
 
 
-def emissivity_OIII(n, T):
+def emissivity_OIII(n, T, ion_H = 1., ion_O=1.):
     """
     [O III] λ5007 [erg s^-1 cm^-3 arcsec^-2]
     Osterbrock & Ferland 2006
@@ -42,9 +42,10 @@ def emissivity_OIII(n, T):
     q12 = 8.629e-6 * gamma_12 * np.exp(-E12_k / T_arr) / (np.sqrt(T_arr) * g_12)
     
     # O2+ fraction (4.57e-4 assuming solar abundances, Gnat & Sternberg 2007)
-    no_ion2 = 4.57e-4 * n_arr
+    n_e = ion_H * n_arr
+    no_ion2 = 4.57e-4 * n_arr * ion_O
     
-    n2 = no_ion2 * n_arr * q12 / A21
+    n2 = no_ion2 * n_e * q12 / A21
     
     # Emissivity
     j = (h * nu / (4 * np.pi)) * n2 * A21 / sr_per_arcsec2
@@ -52,7 +53,7 @@ def emissivity_OIII(n, T):
     return j
 
 
-def emissivity_freefree(n, T, Z, nu, gaunt_lookup):
+def emissivity_freefree(n, T, ion_H, Z_q, nu, gaunt_lookup):
     """
     Free-free emissivity [erg s^-1 cm^-3 arcsec^-2]
     It uses a precomputed lookup table for the gaunt factors
@@ -66,8 +67,8 @@ def emissivity_freefree(n, T, Z, nu, gaunt_lookup):
     
     # Emissivity calculation
     exp_factor = np.exp(-h * nu / (kB * T_arr))
-    C_j = (6.8e-38 / (4 * np.pi)) * Z**2 * nu
-    j = C_j * n_arr**2 * exp_factor * gaunt / np.sqrt(T_arr) / sr_per_arcsec2
+    C_j = (6.8e-38 / (4 * np.pi)) * Z_q**2 * nu
+    j = C_j * (n_arr*ion_H)**2 * exp_factor * gaunt / np.sqrt(T_arr) / sr_per_arcsec2
     j_mJy = j / (1e-26 * nu) # Radio mJy per arcsec^2
     
     return j, j_mJy
