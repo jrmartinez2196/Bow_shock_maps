@@ -155,7 +155,7 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=1e4, *
     return props
 
 
-def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
+def make_projection_maps(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
                               inclination=0.0, PA = 0.,
                               zmax=5e15, nz=75,
                               fwhm_x = 1.0, fwhm_y = 1.0, f_ny=0.7,
@@ -166,7 +166,8 @@ def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
                               wind_regime='hot', wind_T_fixed=None,
                               R_stromgren=3.086e17,
                               nu_ff=2e6*1e9,
-                              distance=224.0):
+                              distance=224.0,
+                              convolve=True):
     """
     Vectorized 2D projected emission maps with pre-computed properties.
     
@@ -265,15 +266,16 @@ def make_projection_maps_fast(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
         nu_ff=nu_ff
     )
 
-    # Instrumental convolution
-    result = convolution(
-        result,
-        x_vals_arcsec,
-        y_vals_arcsec,
-        fwhm_x=fwhm_x,
-        fwhm_y=fwhm_y,
-        f_ny=f_ny
-    )
+    if convolve:
+        # Instrumental convolution
+        result = convolution(
+            result,
+            x_vals_arcsec,
+            y_vals_arcsec,
+            fwhm_x=fwhm_x,
+            fwhm_y=fwhm_y,
+            f_ny=f_ny
+        )
     
     return x_vals_arcsec, y_vals_arcsec, result
 
@@ -537,10 +539,10 @@ def convolution(result, x_vals_arcsec, y_vals_arcsec,
     sigma_x = fwhm_to_sigma(fwhm_x)
     sigma_y = fwhm_to_sigma(fwhm_y)
 
-    if (dx > sigma_x):
-        raise ValueError(f'Map resolution is to low! dx = {dx:.1f}, sigma_x = {sigma_x:.1f}')
-    elif (dy > sigma_y):
-        raise ValueError(f'Map resolution is to low! dy = {dy:.1f}, sigma_y = {sigma_y:.1f}')
+    if (dx > f_ny * fwhm_x):
+        raise ValueError(f'Map resolution is to low! dx = {dx:.1f} arcsec, allowed dx <= {f_ny*fwhm_x:.1f} arcsec')
+    elif (dy > f_ny * fwhm_y):
+        raise ValueError(f'Map resolution is to low! dy = {dy:.1f} arcsec, allowed dy <= {f_ny*fwhm_y:.1f} arcsec')
 
     # Convert beam size to pixels
     sigma_x_pix = sigma_x / dx
@@ -552,7 +554,7 @@ def convolution(result, x_vals_arcsec, y_vals_arcsec,
     # image -> 2D matrix
     for key, image in result.items():
 
-        conv = gaussian_filter(image,sigma=(sigma_y_pix, sigma_x_pix))
+        conv = gaussian_filter(image,sigma=(sigma_y_pix, sigma_x_pix), mode='constant', cval=0.)
 
         # Convert radio map to mJy/beam
         if key == 'I_ff_mJy':
