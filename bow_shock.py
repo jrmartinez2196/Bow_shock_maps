@@ -921,27 +921,26 @@ class BowShock:
         
         self.fig2.canvas.draw_idle()
         
-    
-        
     def update_all(self, val):
         """Update all figures"""
         self.get_params_from_sliders()
         self.update_figure1()
         self.update_figure2()
 
-    def schedule_update(self, val):
-        '''
-        150 ms delay between slider movement and recalculation
-        Makes recalculation faster  
-        '''
-        if hasattr(self, "_update_job"):
-            self.fig_sliders.canvas.get_tk_widget().after_cancel(self._update_job)
 
-        self._update_job = self.fig_sliders.canvas.get_tk_widget().after(
-            150,
-            lambda: self.update_all(None)
-        )
+    def schedule_update(self, val):
+        """
+        150 ms delay between slider movement and recalculation
+        """
+        # Stop previous timer if it exists
+        if hasattr(self, "_update_timer"):
+            self._update_timer.stop()
+        # Create new timer
+        self._update_timer = self.fig_sliders.canvas.new_timer(interval=150)
+        self._update_timer.add_callback(lambda: self.update_all(None))
+        self._update_timer.start()
     
+
     def run(self):
         """Run the application"""
         print("Creating figures...")
