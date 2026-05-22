@@ -30,7 +30,7 @@ from thermodynamics import (
     advection_time
 )
 from utils import (
-    make_projection_maps_fast,
+    make_projection_maps,
     radial_profile,
     arcsecond,
 )
@@ -62,7 +62,7 @@ def clip_data(data):
 
 
 class BowShock:
-    def __init__(self, source_name='RXJ0528+2838', params_dir=None):
+    def __init__(self, source_name='RXJ0528+2838', params_dir=None, convolve=True):
         """
         Initialize bow shock model with parameters from file.
         
@@ -120,14 +120,17 @@ class BowShock:
 
         # Stromgren sphere radius in terms of R0
         self.r0_str = self.params.get('R_str')
+
+        # Determines if the map is convolved with a Gaussian beam or not
+        self.convolve = convolve
         
         # Visualization parameters
         self.zmax = self.params.get('zmax', 5e15)
-        self.nz = self.params.get('nz', 400)
-        self.nx = self.params.get('nx', 200)
-        self.ny = self.params.get('ny', 200)
-        self.xlim_factor = self.params.get('xlim_factor', 10.0)
-        self.ylim_factor = self.params.get('ylim_factor', 10.0)
+        self.nz = self.params.get('nz', 2000)
+        self.nx = self.params.get('nx', 100)
+        self.ny = self.params.get('ny', 100)
+        self.xlim_factor = self.params.get('xlim_factor', 15.0)
+        self.ylim_factor = self.params.get('ylim_factor', 15.0)
         
         # Frequency for free-free emission [Hz]
         self.continuum_frequencies = {
@@ -365,9 +368,10 @@ class BowShock:
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
         R_str = self.r0_str * R0_corrected           # Stromgren sphere radius
         inclination_rad = np.deg2rad(90 - self.inclination)
-        zmax = max(self.zmax, 5 * R0_corrected)
-        
-        #x_vals_arcsec, y_vals_arcsec, result = make_projection_maps_fast(
+        convolve=self.convolve
+        zmax = max(self.zmax, 25. * R0_corrected )
+
+        #x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
         #    xmin = -4.*R0_phys, xmax  = 4.*R0_phys,
         #    ymin = -5*R0_phys, ymax = 3.*R0_phys,
         #    nx = self.nx, ny = self.ny,
@@ -375,7 +379,7 @@ class BowShock:
         #    inclination=inclination_rad, PA = self.PA,
         #    zmax=zmax, nz=self.nz,
             #fwhm_x=10.5, fwhm_y=20.2, f_ny = 0.7,
-        #    fwhm_x=25., fwhm_y=25., f_ny = 0.7,
+        #    fwhm_x=30., fwhm_y=30., f_ny = 0.7,
         #    lmb=self.lmb, R0_phys=R0_corrected,
         #    T_IL=self.T_IL,
         #    Vstar=self.Vstar, n_ism=self.n_ism,
@@ -383,12 +387,13 @@ class BowShock:
         #    wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
         #    R_stromgren=R_str,
         #    nu_ff=self.nu_ff,
-        #    distance=self.distance
+        #    distance=self.distance,
+        #    convolve=convolve
         #)
 
-        x_vals_arcsec, y_vals_arcsec, result = make_projection_maps_fast(
-            xmin = -10.*R0_phys, xmax  = 10.*R0_phys,
-            ymin = -10*R0_phys, ymax = 10.*R0_phys,
+        x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
+            xmin = -10.*R0_phys, xmax  = 20.*R0_phys,
+            ymin = -10*R0_phys, ymax = 20.*R0_phys,
             nx = self.nx, ny = self.ny,
             R_RS_func = self.R_RS_func,
             inclination=inclination_rad, PA = self.PA,
@@ -401,7 +406,8 @@ class BowShock:
             wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
             R_stromgren=R_str,
             nu_ff=self.nu_ff,
-            distance=self.distance
+            distance=self.distance,
+            convolve=convolve
         )
         
         return {
@@ -619,7 +625,7 @@ class BowShock:
             )
 
             # Slider updates plots
-            slider.on_changed(self.update_all)
+            slider.on_changed(self.schedule_update)
 
             # Textbox -> slider
             def submit(text, s=slider):
@@ -756,15 +762,15 @@ class BowShock:
             y0 = 0.0
 
             # map limits before rotation. Minimize blank regions
-            #xmin_bs = -2.0 * arcsecond(R0_corrected, self.distance)
+            #sxmin_bs = -2.0 * arcsecond(R0_corrected, self.distance)
             #xmax_bs =  4.0 * arcsecond(R0_corrected, self.distance)
             #ymin_bs = -3. * arcsecond(R0_corrected, self.distance)
             #ymax_bs =  3. * arcsecond(R0_corrected, self.distance)
 
-            xmin_bs = -5. * arcsecond(R0_corrected, self.distance)
-            xmax_bs =  5.0 * arcsecond(R0_corrected, self.distance)
-            ymin_bs = -5. * arcsecond(R0_corrected, self.distance)
-            ymax_bs =  5. * arcsecond(R0_corrected, self.distance)
+            xmin_bs = -10. * arcsecond(R0_corrected, self.distance)
+            xmax_bs =  20.0 * arcsecond(R0_corrected, self.distance)
+            ymin_bs = -10. * arcsecond(R0_corrected, self.distance)
+            ymax_bs =  20. * arcsecond(R0_corrected, self.distance)
 
             # Corners (before rotation)
             corners = np.array([
@@ -787,7 +793,7 @@ class BowShock:
             data_list = [I_Halpha, I_OIII, I_ff]
             keys = ['Halpha', 'OIII', 'ff']
             # cmap inferno with white at lower limit. Save printer ink!
-            cmap = cm.get_cmap('inferno').copy()
+            cmap = plt.colormaps['inferno'].copy()
             cmap.set_under('white')
             
             for i, (key, I_data) in enumerate(zip(keys, data_list)):
@@ -827,8 +833,7 @@ class BowShock:
 
                 # Contour levels
                 if self.contours[key] is not None:
-                    for coll in self.contours[key].collections:
-                        coll.remove()
+                    self.contours[key].remove()
 
                 cont = ax.contour(
                     maps['x'],
@@ -923,6 +928,19 @@ class BowShock:
         self.get_params_from_sliders()
         self.update_figure1()
         self.update_figure2()
+
+    def schedule_update(self, val):
+        '''
+        150 ms delay between slider movement and recalculation
+        Makes recalculation faster  
+        '''
+        if hasattr(self, "_update_job"):
+            self.fig_sliders.canvas.get_tk_widget().after_cancel(self._update_job)
+
+        self._update_job = self.fig_sliders.canvas.get_tk_widget().after(
+            150,
+            lambda: self.update_all(None)
+        )
     
     def run(self):
         """Run the application"""
@@ -982,6 +1000,13 @@ Available frequencies:
         default=None,
         help='Spectrum band to compute free-free emission (e.g.: FUV, IR, Xray_soft)'
     )
+
+    parser.add_argument(
+        '--convolve',
+        type=lambda x: x.lower() == 'true',
+        default=True,
+        help='Determines if the emission map is convolved with a Gaussian beam instrument or not'
+    )
     
     args = parser.parse_args()
     
@@ -1003,7 +1028,7 @@ Available frequencies:
         sys.exit(0)
     
     print(f"Loading. Source: {args.source}, params_dir: {args.params_dir}")
-    app = BowShock(args.source, args.params_dir)
+    app = BowShock(args.source, args.params_dir, convolve=args.convolve)
     
     if args.band:
         app.set_continuum_band(args.band)
