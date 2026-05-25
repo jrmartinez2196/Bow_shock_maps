@@ -262,8 +262,6 @@ class BowShock:
         self.inclination = self.sliders['inclination'].val
         
         self.update_lam_from_T_ism()
-        
-        # Update R_RS_func when lam changes
         self.update_R_RS_func()
     
     def compute_thermo(self):
@@ -297,8 +295,6 @@ class BowShock:
         alpha = self.alpha
         lam = self.lam
         R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
-
-        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(np.deg2rad(self.inclination)), self.distance):.1f} ''")
         
         thr, rr_norm = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=np.pi)
         
@@ -570,9 +566,6 @@ class BowShock:
         self.fig_sliders.suptitle('Bow Shock Parameters', fontsize=16)
         self.textboxes = {}
         
-        left_x = 0.15
-        width = 0.7
-        height = 0.04
         start_y = 0.85
         spacing = 0.055
         
@@ -635,15 +628,18 @@ class BowShock:
                     pass
 
             textbox.on_submit(submit)
+            slider.on_changed(update_text)
 
             # Slider -> textbox
             def update_text(val, tb=textbox):
                 tb.set_val(f'{val:.4g}')
 
-            slider.on_changed(update_text)
-
             self.sliders[name] = slider
             self.textboxes[name] = textbox
+
+        self._update_timer = self.fig_sliders.canvas.new_timer(interval=150)
+        self._update_timer.single_shot = True
+        self._update_timer.add_callback(self.delayed_update)
         
         ax_reset = self.fig_sliders.add_axes([0.4, 0.02, 0.2, 0.04])
         btn_reset = Button(ax_reset, 'Reset All')
@@ -651,6 +647,7 @@ class BowShock:
         
         plt.show(block=False)
     
+
     def reset_all(self, event):
         """Reset all sliders to initial values"""
         self.Mdot_msun = 1e-9
@@ -924,20 +921,20 @@ class BowShock:
     def update_all(self, val):
         """Update all figures"""
         self.get_params_from_sliders()
+        R0_phys = self.update_R0()
+        R0_corrected = R0_phys / np.sqrt(1 + self.alpha)
+        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(np.deg2rad(self.inclination)), self.distance):.1f} ''")
         self.update_figure1()
         self.update_figure2()
 
+    def delayed_update(self):
+            self.update_all(None)
 
     def schedule_update(self, val):
         """
         150 ms delay between slider movement and recalculation
         """
-        # Stop previous timer if it exists
-        if hasattr(self, "_update_timer"):
-            self._update_timer.stop()
-        # Create new timer
-        self._update_timer = self.fig_sliders.canvas.new_timer(interval=150)
-        self._update_timer.add_callback(lambda: self.update_all(None))
+        self._update_timer.stop()
         self._update_timer.start()
     
 
