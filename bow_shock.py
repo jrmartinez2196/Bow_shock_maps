@@ -34,31 +34,14 @@ from utils import (
     radial_profile,
     arcsecond,
 )
-
-def sanitize_log_data(data):
-    """Ensure data is valid for LogNorm"""
-    data = np.asarray(data)
-    data = np.where(np.isfinite(data), data, 0.0)
-    return np.clip(data, 1e-300, None)
-
-def get_norm(data):
-    data = data[np.isfinite(data) & (data > 0)]
-    
-    if len(data) == 0:
-        return LogNorm(vmin=1e-30, vmax=1e-20)
-    
-    vmax = np.max(data)
-    
-    vmin = vmax / 500.
-    
-    return LogNorm(vmin=vmin, vmax=1.1*vmax)
-
-
-def clip_data(data):
-    """Clip extreme bright pixels to improve contrast"""
-    data = np.asarray(data)
-    pmax = np.percentile(data[np.isfinite(data)], 99.5)
-    return np.clip(data, None, pmax)
+from plot_maps import (
+    sanitize_log_data,
+    compute_map_extent,
+    compute_R0_position,
+    compute_plot_limits,
+    update_map_panel,
+    update_map_limits
+)
 
 
 class BowShock:
@@ -126,14 +109,15 @@ class BowShock:
         
         # Visualization parameters
         self.zmax = self.params.get('zmax', 5e15)
-        self.nz = self.params.get('nz', 2000)
-        self.nx = self.params.get('nx', 100)
-        self.ny = self.params.get('ny', 100)
+        self.nz = self.params.get('nz', 1000)
+        self.nx = self.params.get('nx', 150)
+        self.ny = self.params.get('ny', 150)
         self.xlim_factor = self.params.get('xlim_factor', 15.0)
         self.ylim_factor = self.params.get('ylim_factor', 15.0)
         
         # Frequency for free-free emission [Hz]
         self.continuum_frequencies = {
+            'low_radio': 325e6,
             'radio': 3e9,           # 3 GHz - radio
             'IR': 3e12,             # 3 THz - MIR
             'optical_R': 4.3e14,    # 700 nm - OP - Red
@@ -162,6 +146,8 @@ class BowShock:
         self.fig3_ax = None
         self.rgb_image = None
         self.fig3_colorbars = {}
+        self.thermo_data = None
+        self.map_data = None
         
         # Pre-compute theta grid
         print("Computing theta grid...")
@@ -222,7 +208,12 @@ class BowShock:
     def update_R0(self):
         """Calculate standoff radius [cm]"""
         return standoff_distance(self.Mdot, self.Vw, self.Vstar, self.n_ism)
-    
+
+    def get_R0_corrected(self):
+        """Standoff distance corrected by ISM thermal pressure"""
+        R0_phys = self.update_R0()
+        return R0_phys / np.sqrt(1.0 + self.alpha)
+
     def update_R_RS_func(self):
         """
         Updates the R_RS function using the Christie ODE integration.
@@ -291,10 +282,10 @@ class BowShock:
             'v_tan' : Tangential velocities [cm/s]
             'ratio' : Cooling-to-advection time ratios
         """
-        R0_phys = self.update_R0()
+        print("Computing thermo")
+        R0_corrected = self.get_R0_corrected()
         alpha = self.alpha
         lam = self.lam
-        R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
         
         thr, rr_norm = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=np.pi)
         
@@ -302,7 +293,7 @@ class BowShock:
         rr = r_interp(self.theta_grid)
         rr = np.where(np.isfinite(rr), rr, 1.0)
 
-        n_wind = self.Mdot/(4.*np.pi*(rr*R0_phys)**2*self.Vw)/mu_sh/mp
+        n_wind = self.Mdot/(4.*np.pi*(rr*R0_corrected)**2*self.Vw)/mu_sh/mp
         
         n_RS, T_RS, n_rec_RS, T_rec_RS, regime_RS, H_hot_RS, H_cold_RS, H_total_RS = post_shock_conditions(
             self.theta_grid, rr, 'RS', R0_corrected,
@@ -358,43 +349,27 @@ class BowShock:
         }
     
     def compute_maps(self):
-        """Compute emission maps using vectorized code."""
-        R0_phys = self.update_R0()
+        """
+        Compute emission maps
+        """
+        print(f"Projected stagnation point distance = {arcsecond(self.get_R0_corrected()*np.cos(np.deg2rad(self.inclination)), self.distance):.1f} ''")
+        print("Computing maps")
+        R0_corrected = self.get_R0_corrected()
         alpha = self.alpha
-        R0_corrected = R0_phys * np.sqrt(1/(1+alpha))
         R_str = self.r0_str * R0_corrected           # Stromgren sphere radius
         inclination_rad = np.deg2rad(90 - self.inclination)
         convolve=self.convolve
         zmax = max(self.zmax, 25. * R0_corrected )
 
-        #x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-        #    xmin = -4.*R0_phys, xmax  = 4.*R0_phys,
-        #    ymin = -5*R0_phys, ymax = 3.*R0_phys,
-        #    nx = self.nx, ny = self.ny,
-        #    R_RS_func = self.R_RS_func,
-        #    inclination=inclination_rad, PA = self.PA,
-        #    zmax=zmax, nz=self.nz,
-            #fwhm_x=10.5, fwhm_y=20.2, f_ny = 0.7,
-        #    fwhm_x=30., fwhm_y=30., f_ny = 0.7,
-        #    lmb=self.lmb, R0_phys=R0_corrected,
-        #    T_IL=self.T_IL,
-        #    Vstar=self.Vstar, n_ism=self.n_ism,
-        #    Mdot=self.Mdot, Vw=self.Vw,
-        #    wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
-        #    R_stromgren=R_str,
-        #    nu_ff=self.nu_ff,
-        #    distance=self.distance,
-        #    convolve=convolve
-        #)
-
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-            xmin = -10.*R0_phys, xmax  = 20.*R0_phys,
-            ymin = -10*R0_phys, ymax = 20.*R0_phys,
+            xmin = -5.*R0_corrected, xmax  = 5.*R0_corrected,
+            ymin = -6.*R0_corrected, ymax = 4.*R0_corrected,
             nx = self.nx, ny = self.ny,
             R_RS_func = self.R_RS_func,
             inclination=inclination_rad, PA = self.PA,
             zmax=zmax, nz=self.nz,
-            fwhm_x=10., fwhm_y=10., f_ny = 0.7,
+            #fwhm_x=10.5, fwhm_y=20.2, f_ny = 0.7,
+            fwhm_x=54., fwhm_y=77., f_ny = 0.7,
             lmb=self.lmb, R0_phys=R0_corrected,
             T_IL=self.T_IL,
             Vstar=self.Vstar, n_ism=self.n_ism,
@@ -405,6 +380,25 @@ class BowShock:
             distance=self.distance,
             convolve=convolve
         )
+
+        #x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
+        #    xmin = -10.*R0_corrected, xmax  = 20.*R0_corrected,
+        #    ymin = -10*R0_corrected, ymax = 20.*R0_corrected,
+        #    nx = self.nx, ny = self.ny,
+        #    R_RS_func = self.R_RS_func,
+        #    inclination=inclination_rad, PA = self.PA,
+        #    zmax=zmax, nz=self.nz,
+        #    fwhm_x=10., fwhm_y=10., f_ny = 0.7,
+        #    lmb=self.lmb, R0_phys=R0_corrected,
+        #    T_IL=self.T_IL,
+        #    Vstar=self.Vstar, n_ism=self.n_ism,
+        #    Mdot=self.Mdot, Vw=self.Vw,
+        #    wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
+        #    R_stromgren=R_str,
+        #    nu_ff=self.nu_ff,
+        #    distance=self.distance,
+        #    convolve=convolve
+        #)
         
         return {
             'x': x_vals_arcsec,
@@ -436,8 +430,8 @@ class BowShock:
         ax3 = self.fig1.add_subplot(3, 2, 3)
         ax3.set_xlabel(r'$\theta$ [rad]')
         ax3.set_ylabel(r'H/R')
-        ax3.set_yscale('linear')
-        ax3.set_ylim(1e-1,1.)
+        ax3.set_yscale('log')
+        ax3.set_ylim(1e-2,1.)
         ax3.set_title('Normalized Layer Thickness')
         ax3.grid(True, alpha=0.3)
         
@@ -524,7 +518,7 @@ class BowShock:
         ax_radial_profiles.set_title('Normalizaed radial Emission Profiles')
         ax_radial_profiles.set_xlabel('Radius [arcsec]')
         ax_radial_profiles.set_ylabel('')
-        ax_radial_profiles.set_xlim(0,150)
+        ax_radial_profiles.set_xlim(0,500)
         
         # Store axes and images
         self.fig2_axes = {
@@ -618,7 +612,11 @@ class BowShock:
             )
 
             # Slider updates plots
-            slider.on_changed(self.schedule_update)
+            if name == 'inclination': # do not calculate everything if only inclination changes
+                slider.on_changed(self.schedule_map_update)
+
+            else:
+                slider.on_changed(self.schedule_update)
 
             # Textbox -> slider
             def submit(text, s=slider):
@@ -627,12 +625,16 @@ class BowShock:
                 except ValueError:
                     pass
 
-            textbox.on_submit(submit)
-            slider.on_changed(update_text)
 
             # Slider -> textbox
             def update_text(val, tb=textbox):
+                tb.eventson = False
                 tb.set_val(f'{val:.4g}')
+                tb.eventson = True
+
+            textbox.on_submit(submit)
+            slider.on_changed(update_text)
+
 
             self.sliders[name] = slider
             self.textboxes[name] = textbox
@@ -676,7 +678,7 @@ class BowShock:
         self.update_R_RS_func()
     
     def update_figure1(self):
-        prof = self.compute_thermo()
+        prof = self.thermo_data
         
         self.lines['fig1']['n_RS_hot'].set_data(prof['theta'], prof['n_RS_hot'])
         self.lines['fig1']['n_RS_cold'].set_data(prof['theta'], prof['n_RS_cold'])
@@ -712,231 +714,210 @@ class BowShock:
         
         self.fig1_axes[4].set_xlim(0, np.max(prof['theta']))
         
-        for ax in self.fig1_axes[:4]:
+        for i, ax in enumerate(self.fig1_axes[:4]):
             ax.relim()
-            ax.autoscale_view()
+            if i == 2:
+                ax.autoscale_view(scaley=False)
+            else:
+                ax.autoscale_view()
         
         self.fig1.canvas.draw_idle()
+
+
+    def recompute_thermo(self):
+        """Recompute thermodynamic profiles and cache them"""
+        self.thermo_data = self.compute_thermo()
+
+
+    def recompute_maps(self):
+        """Recompute emission maps and cache them"""
+        self.map_data = self.compute_maps()
     
+    
+    def update_radial_profiles(self, maps, I_Halpha, I_OIII, I_ff):
+        """
+        Update normalized radial emission profiles
+        """
+
+        if not np.any(I_Halpha > 0):
+            return
+
+        r_prof, prof_Halpha = radial_profile(maps['x'], maps['y'], I_Halpha,
+            dX=0.0, nbins=50, r_min=0.0, r_max=500.0
+        )
+
+        _, prof_OIII = radial_profile(maps['x'], maps['y'], I_OIII,
+            dX=0.0, nbins=50, r_min=0.0, r_max=500.0
+        )
+
+        _, prof_ff = radial_profile(maps['x'], maps['y'], I_ff,
+            dX=0.0, nbins=50, r_min=0.0, r_max=500.0
+        )
+
+        prof_Halpha_norm = prof_Halpha / np.max(prof_Halpha)
+        prof_OIII_norm = prof_OIII / np.max(prof_OIII)
+        prof_ff_norm = prof_ff / np.max(prof_ff)
+
+        self.profiles['Halpha'].set_data(r_prof, prof_Halpha_norm)
+        self.profiles['OIII'].set_data(r_prof, prof_OIII_norm)
+        self.profiles['ff'].set_data(r_prof, prof_ff_norm)
+
+        self.fig2_axes['profiles'].set_ylim(0, 1.1)
+        self.fig2_axes['profiles'].set_ylabel('Normalized Intensity')
+
+        self.fig2_axes['profiles'].relim()
+        self.fig2_axes['profiles'].autoscale_view(scaley=False)
+
+
     def update_figure2(self):
+
         try:
-            maps = self.compute_maps()
-            
-            # Clean data
+
+            maps = self.map_data
+
             I_Halpha = sanitize_log_data(maps['I_Halpha'])
-            I_OIII   = sanitize_log_data(maps['I_OIII'])
-            if (self.band_name == 'radio'):
-                I_ff = sanitize_log_data(maps['I_ff_mJy'])
-            else:
-                I_ff = sanitize_log_data(maps['I_ff_total'])
+            I_OIII = sanitize_log_data(maps['I_OIII'])
 
-            extent = [
-                np.min(maps['x']), np.max(maps['x']),
-                np.min(maps['y']), np.max(maps['y'])
-            ]
+            ff_key = (
+                'I_ff_mJy'
+                if self.band_name in ('radio', 'low_radio')
+                else 'I_ff_total'
+            )
 
-            #Projected values
-            R0_phys = self.update_R0()
-            # Taking into account ISM thermal pressure
-            R0_corrected = R0_phys / np.sqrt(1 + self.alpha)
+            I_ff = sanitize_log_data(maps[ff_key])
 
-            R_str = self.r0_str * R0_corrected
+            extent = compute_map_extent(maps)
 
-            inc = np.deg2rad(self.inclination)
+            R0_corrected = self.get_R0_corrected()
 
-            # Star translation from the origin
-            dx_star = arcsecond(R0_corrected * np.cos(inc), self.distance)
-            dy_star = 0.0
+            R0_pos = compute_R0_position(
+                inclination=self.inclination,
+                PA=self.PA,
+                distance=self.distance,
+                R0_corrected=R0_corrected
+            )
 
-            # Rotate according to PA. PA = 0 -> BS pointing towards north, measured from north to east
-            PA_rot = np.deg2rad(self.PA - 90.)
+            limits = compute_plot_limits(
+                R0_corrected=R0_corrected,
+                distance=self.distance,
+                PA=self.PA
+            )
 
-            x_star = dx_star*np.cos(PA_rot) + dy_star*np.sin(PA_rot)
-            y_star = dx_star*np.sin(PA_rot) - dy_star*np.cos(PA_rot)
+            x0 = R0_pos['x_R0']
+            y0 = R0_pos['y_R0']
 
-            # Apex
-            x0 = 0.0
-            y0 = 0.0
+            x_star = 0.0
+            y_star = 0.0
 
-            # map limits before rotation. Minimize blank regions
-            #sxmin_bs = -2.0 * arcsecond(R0_corrected, self.distance)
-            #xmax_bs =  4.0 * arcsecond(R0_corrected, self.distance)
-            #ymin_bs = -3. * arcsecond(R0_corrected, self.distance)
-            #ymax_bs =  3. * arcsecond(R0_corrected, self.distance)
-
-            xmin_bs = -10. * arcsecond(R0_corrected, self.distance)
-            xmax_bs =  20.0 * arcsecond(R0_corrected, self.distance)
-            ymin_bs = -10. * arcsecond(R0_corrected, self.distance)
-            ymax_bs =  20. * arcsecond(R0_corrected, self.distance)
-
-            # Corners (before rotation)
-            corners = np.array([
-                [xmin_bs, ymin_bs],
-                [xmin_bs, ymax_bs],
-                [xmax_bs, ymin_bs],
-                [xmax_bs, ymax_bs]
-            ])
-
-            x_rot = corners[:,0]*np.cos(PA_rot) - corners[:,1]*np.sin(PA_rot)
-            y_rot = corners[:,0]*np.sin(PA_rot) + corners[:,1]*np.cos(PA_rot)
-
-            # map limits after rotation
-            xmin = np.min(x_rot)
-            xmax = np.max(x_rot)
-            ymin = np.min(y_rot)
-            ymax = np.max(y_rot)
-
-            # Emission maps
             data_list = [I_Halpha, I_OIII, I_ff]
             keys = ['Halpha', 'OIII', 'ff']
-            # cmap inferno with white at lower limit. Save printer ink!
-            cmap = plt.colormaps['inferno'].copy()
-            cmap.set_under('white')
-            
+
             for i, (key, I_data) in enumerate(zip(keys, data_list)):
+
                 ax = self.fig2_axes['maps'][i]
-                img = self.images[key]
-                
-                norm = get_norm(I_data)
-                
-                if img is None:
-                    img_obj = ax.imshow(
-                        I_data,
-                        origin='lower',
-                        extent=extent,
-                        cmap=cmap,
-                        norm=norm
-                    )
 
-                    self.images[key] = img_obj
+                update_map_panel(
+                    ax=ax,
+                    key=key,
+                    I_data=I_data,
+                    extent=extent,
+                    maps=maps,
 
-                    if key == 'ff' and self.band_name == 'radio':
-                        cbar_label = r'Surface brightness [mJy beam$^{-1}$]'
-                    elif key == 'Halpha':
-                        cbar_label = r'Surface brightness [R]'
-                    else:
-                        cbar_label = r'Surface brightness [erg s$^{-1}$ cm$^{-2}$ arcsec$^{-2}$]'
+                    x_star=x_star,
+                    y_star=y_star,
+                    x0=x0,
+                    y0=y0,
 
-                    self.colorbars[key] = plt.colorbar(
-                        img_obj,
-                        ax=ax,
-                        label=cbar_label
-                    )
+                    R0_corrected=R0_corrected,
+                    distance=self.distance,
+                    band_name=self.band_name,
 
-                else:
-                    img.set_data(I_data)
-                    img.set_extent(extent)
-                    img.set_norm(norm)
-
-                # Contour levels
-                if self.contours[key] is not None:
-                    self.contours[key].remove()
-
-                cont = ax.contour(
-                    maps['x'],
-                    maps['y'],
-                    I_data,
-                    levels=np.max(I_data) * np.array([0.05, 0.1, 0.5]),
-                    colors='lime'
+                    images=self.images,
+                    colorbars=self.colorbars,
+                    contours=self.contours,
+                    star_markers=self.star_markers,
+                    arrows=self.arrows
                 )
 
-                self.contours[key] = cont
+            update_map_limits(
+                self.fig2_axes['maps'],
+                limits['xmin'],
+                limits['xmax'],
+                limits['ymin'],
+                limits['ymax']
+            )
 
-                # Star
-                if self.star_markers[key] is None:
-                    star, = ax.plot(
-                        x_star, y_star,
-                        marker='*',
-                        color='black',
-                        markersize=10,
-                        zorder=5
-                    )
-                    self.star_markers[key] = star
-                else:
-                    self.star_markers[key].set_data([x_star], [y_star])
+            self.update_radial_profiles(
+                maps,
+                I_Halpha,
+                I_OIII,
+                I_ff
+            )
 
-                # Arrow towars R0
-                dx_arrow = x0 - x_star
-                dy_arrow = y0 - y_star
-
-                if self.arrows[key] is not None:
-                    self.arrows[key].remove()
-
-                arr = ax.arrow(
-                    x_star, y_star,
-                    dx_arrow, dy_arrow,
-                    color='black',
-                    width=0.0,
-                    head_width=0.05 * arcsecond(R0_corrected, self.distance),
-                    length_includes_head=True,
-                    zorder=5
-                )
-                self.arrows[key] = arr
-
-            # Zoom
-            for ax in self.fig2_axes['maps']:
-                ax.set_xlim(xmin, xmax)
-                ax.set_ylim(ymin, ymax)
-                ax.set_aspect('equal')
-
-            # Radial profiles
-            if np.any(I_Halpha > 0):
-                r_prof, prof_Halpha = radial_profile(
-                    maps['x'], maps['y'], I_Halpha,
-                    dX=0.0, nbins=33, r_min=0.0, r_max=150.0
-                )
-                _, prof_OIII = radial_profile(
-                    maps['x'], maps['y'], I_OIII,
-                    dX=0.0, nbins=33, r_min=0.0, r_max=150.0
-                )
-                _, prof_ff = radial_profile(
-                    maps['x'], maps['y'], I_ff,
-                    dX=0.0, nbins=33, r_min=0.0, r_max=150.0
-                )
-                
-                # Normalize each profile to its maximum
-                prof_Halpha_norm = prof_Halpha / np.max(prof_Halpha)
-                prof_OIII_norm = prof_OIII / np.max(prof_OIII)
-                prof_ff_norm = prof_ff / np.max(prof_ff)
-                
-                # Update profiles with normalized data
-                self.profiles['Halpha'].set_data(r_prof, prof_Halpha_norm)
-                self.profiles['OIII'].set_data(r_prof, prof_OIII_norm)
-                self.profiles['ff'].set_data(r_prof, prof_ff_norm)
-                
-                # Yaxis covering shorter range
-                self.fig2_axes['profiles'].set_ylim(0, 1.1)
-                self.fig2_axes['profiles'].set_ylabel('Normalized Intensity')
-                
-                self.fig2_axes['profiles'].relim()
-                self.fig2_axes['profiles'].autoscale_view(scaley=False)
-                
         except Exception as e:
+
             print(f"Error in update_figure2: {e}")
+
             import traceback
             traceback.print_exc()
-        
+
         self.fig2.canvas.draw_idle()
         
+
     def update_all(self, val):
-        """Update all figures"""
+        """
+        Recompute and also replot figures
+        """
         self.get_params_from_sliders()
-        R0_phys = self.update_R0()
-        R0_corrected = R0_phys / np.sqrt(1 + self.alpha)
-        print(f"Projected stagnation point distance = {arcsecond(R0_corrected*np.cos(np.deg2rad(self.inclination)), self.distance):.1f} ''")
+        self.recompute_thermo()
+        self.recompute_maps()
+        self.update_profiles()
+        self.update_maps()
+
+
+    def update_profiles(self):
+        """
+        Update thermodynamics plots
+        """
         self.update_figure1()
+
+
+    def update_maps(self):
+        """
+        Update emission maps plots
+        """
         self.update_figure2()
+    
 
     def delayed_update(self):
+        '''
+
+        '''
+        if self._pending_update == 'maps':
+            self.get_params_from_sliders()
+            self.recompute_maps()
+            self.update_maps()
+        else:
             self.update_all(None)
+
 
     def schedule_update(self, val):
         """
-        150 ms delay between slider movement and recalculation
+        Schedule full update
         """
+        self._pending_update = 'full'
         self._update_timer.stop()
         self._update_timer.start()
     
+
+    def schedule_map_update(self, val):
+        """
+        Schedule maps update only
+        """
+        self._pending_update = 'maps'
+        self._update_timer.stop()
+        self._update_timer.start()
+
 
     def run(self):
         """Run the application"""
@@ -966,7 +947,7 @@ E.g.:
   python3 bow_shock.py --list-bands
 
 Available frequencies:
-  radio, IR, optical_R, optical_V, optical_B, FUV, EUV, Xray_soft, Xray_hard
+  low_radio, radio, IR, optical_R, optical_V, optical_B, FUV, EUV, Xray_soft, Xray_hard
         """
     )
     
@@ -1009,6 +990,7 @@ Available frequencies:
     if args.list_bands:
         print("Available spectrum bands to calculate free-free:")
         bands = {
+            'low_radio': '325 MHz - low freq radio',
             'radio': '3 GHz - Radio',
             'IR': '3 THz - Mid infrared',
             'optical_R': '700 nm - Opt, red',
