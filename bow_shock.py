@@ -29,7 +29,7 @@ from thermodynamics import (
     cooling_time,
     advection_time
 )
-from utils import (
+from maps import (
     make_projection_maps,
     radial_profile,
     arcsecond,
@@ -45,18 +45,13 @@ from plot_maps import (
 
 
 class BowShock:
-    def __init__(self, source_name='RXJ0528+2838', params_dir=None, convolve=True):
-        """
-        Initialize bow shock model with parameters from file.
-        
-        Parameters:
-        -----------
-        source_name : str
-            Name of the source (e.g., 'RXJ0528+2838')
-        params_dir : str or Path
-            Directory containing parameter files (converted to Path internally)
-        """
-        # Convert to Path if string provided
+
+
+    # ==========================================================
+    # Initialization
+    # ==========================================================
+
+    def _load_parameters(self, source_name='RXJ0528+2838', params_dir=None):
         if params_dir is None:
             params_dir = Path.cwd()
         else:
@@ -90,7 +85,17 @@ class BowShock:
         
         # Initialize T_ism (will be controlled by slider)
         self.T_ism = self.params.get('T_ism', 8.e3)
-        
+
+        print(f"Loaded parameters for {source_name}")
+        print(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
+        print(f"  Vw = {self.Vw/1e5:.1f} km/s")
+        print(f"  Vstar = {self.Vstar/1e5:.1f} km/s")
+        print(f"  n_ism = {self.n_ism:.2f} cm^-3")
+        print(f"  T_ism = {self.T_ism:.2f} K")
+        print(f"  inclination = {self.inclination:.1f} deg")
+
+
+    def _initialize_model(self):
         # Calculate lam from T_ism (physical relation)
         self.update_lam_from_T_ism()
         
@@ -104,17 +109,6 @@ class BowShock:
         # Stromgren sphere radius in terms of R0
         self.r0_str = self.params.get('R_str')
 
-        # Determines if the map is convolved with a Gaussian beam or not
-        self.convolve = convolve
-        
-        # Visualization parameters
-        self.zmax = self.params.get('zmax', 5e15)
-        self.nz = self.params.get('nz', 1000)
-        self.nx = self.params.get('nx', 150)
-        self.ny = self.params.get('ny', 150)
-        self.xlim_factor = self.params.get('xlim_factor', 15.0)
-        self.ylim_factor = self.params.get('ylim_factor', 15.0)
-        
         # Frequency for free-free emission [Hz]
         self.continuum_frequencies = {
             'low_radio': 325e6,
@@ -132,38 +126,22 @@ class BowShock:
         band_name = self.params.get('continuum_band', 'FUV')
         self.band_name = band_name
         self.nu_ff = self.continuum_frequencies.get(band_name, self.continuum_frequencies['FUV'])
-        
-        # Store references to plot objects
-        self.fig1 = None
-        self.fig2 = None
-        self.fig3 = None
-        self.fig_sliders = None
-        self.sliders = {}
-        self.lines = {}
-        self.images = {}
-        self.colorbars = {}
-        self.profiles = {}
-        self.fig3_ax = None
-        self.rgb_image = None
-        self.fig3_colorbars = {}
-        self.thermo_data = None
-        self.map_data = None
-        
+
         # Pre-compute theta grid
         print("Computing theta grid...")
-        self.theta_grid = np.linspace(0.01, 2.*np.pi/3., 500)
+        self.theta_grid = np.linspace(0.01, np.deg2rad(170.), 500)
         
         # Load initial R_RS function
         print("Loading R_RS function...")
         self.update_R_RS_func()
-        
-        print(f"Loaded parameters for {source_name}")
-        print(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
-        print(f"  Vw = {self.Vw/1e5:.1f} km/s")
-        print(f"  Vstar = {self.Vstar/1e5:.1f} km/s")
-        print(f"  n_ism = {self.n_ism:.2f} cm^-3")
-        print(f"  T_ism = {self.T_ism:.2f} K")
-        print(f"  inclination = {self.inclination:.1f} deg")
+
+        # Map calculation parameters
+        self.zmax = self.params.get('zmax', 5e15)
+        self.nz = self.params.get('nz', 1000)
+        self.nx = self.params.get('nx', 150)
+        self.ny = self.params.get('ny', 150)
+        self.xlim_factor = self.params.get('xlim_factor', 15.0)
+        self.ylim_factor = self.params.get('ylim_factor', 15.0)
 
     def get_continuum_bands(self):
         """Returns the available frequencies to compute free-free emission"""
@@ -180,7 +158,49 @@ class BowShock:
         else:
             available = ', '.join(self.get_continuum_bands())
             raise ValueError(f"Unknown band: {band_name}. Available: {available}")
-    
+
+
+    def _initialize_plots(self):
+        # Store references to plot objects
+        self.fig1 = None
+        self.fig2 = None
+        self.fig3 = None
+        self.fig_sliders = None
+        self.sliders = {}
+        self.lines = {}
+        self.images = {}
+        self.colorbars = {}
+        self.profiles = {}
+        self.fig3_ax = None
+        self.rgb_image = None
+        self.fig3_colorbars = {}
+        self.thermo_data = None
+        self.map_data = None
+
+
+    def __init__(self, source_name='RXJ0528+2838', params_dir=None, convolve=True):
+        """
+        Initialize bow shock model with parameters from file.
+        
+        Parameters:
+        -----------
+        source_name : str
+            Name of the source (e.g., 'RXJ0528+2838')
+        params_dir : str or Path
+            Directory containing parameter files (converted to Path internally)
+        """
+       
+        self._load_parameters(source_name, params_dir)
+        # Determines if the map is convolved with a Gaussian beam or not
+        self.convolve = convolve
+        self._initialize_model()
+        self._initialize_plots()
+
+
+    # ==========================================================
+    # Bow shock geometry
+    # ==========================================================
+
     def update_lam_from_T_ism(self):
         """
         Calculate lam from T_ism:
@@ -238,23 +258,12 @@ class BowShock:
             bounds_error=False, 
             fill_value=(r_vals[0], r_vals[-1])
         )
-    
-    def get_params_from_sliders(self):
-        """
-        Get current parameter values from sliders and convert to CGS
-        """
-        self.Mdot_msun = 10**self.sliders['Mdot_log'].val
-        self.Mdot = self.Mdot_msun * Msun_yr
-        self.Vw = self.sliders['Vw'].val * 1e5      # km/s -> cm/s
-        self.Vstar = self.sliders['Vstar'].val * 1e5 # km/s -> cm/s
-        self.n_ism = self.sliders['n_ism'].val
-        self.T_ism = self.sliders['T_ism'].val
-        self.r0_str = self.sliders['r0_str'].val
-        self.inclination = self.sliders['inclination'].val
+
+    # ==========================================================
+    # Physics
+    # ==========================================================
         
-        self.update_lam_from_T_ism()
-        self.update_R_RS_func()
-    
+
     def compute_thermo(self):
         """
         Computes the hydro and thermodynamic variables as a function of theta
@@ -408,7 +417,13 @@ class BowShock:
             'I_ff_total': result['I_ff_total'],
             'I_ff_mJy' : result['I_ff_mJy']
         }
-    
+
+
+    # ==========================================================
+    # Figure creation
+    # ==========================================================
+
+
     def create_figure1(self):
         self.fig1 = plt.figure(figsize=(15, 12))
         self.fig1.suptitle('Bow Shock Profiles', fontsize=16)
@@ -483,6 +498,7 @@ class BowShock:
         ax5.legend()
         
         self.fig1.tight_layout()
+
     
     def create_figure2(self):
         self.fig2 = plt.figure(figsize=(15, 12))
@@ -648,35 +664,13 @@ class BowShock:
         btn_reset.on_clicked(self.reset_all)
         
         plt.show(block=False)
-    
 
-    def reset_all(self, event):
-        """Reset all sliders to initial values"""
-        self.Mdot_msun = 1e-9
-        self.Mdot = 1e-9 * Msun_yr
-        self.Vw = 100.0 * 1e5
-        self.Vstar = 128.5 * 1e5
-        self.n_ism = 0.2
-        self.T_ism = 8000.0
-        self.r0_str = 1.6
-        self.inclination = 75.0
-        
-        for name, slider in self.sliders.items():
-            if name == 'Mdot_log':
-                val = np.log10(self.Mdot_msun)
-            elif name == 'Vw':
-                val = self.Vw/1e5
-            elif name == 'Vstar':
-                val = self.Vstar/1e5
-            elif name == 'T_ism':
-                val = self.T_ism
-            else:
-                val = getattr(self, name)
-            slider.set_val(val)
-        
-        self.update_lam_from_T_ism()
-        self.update_R_RS_func()
-    
+
+    # ==========================================================
+    # Figure updates
+    # ==========================================================
+
+
     def update_figure1(self):
         prof = self.thermo_data
         
@@ -722,16 +716,6 @@ class BowShock:
                 ax.autoscale_view()
         
         self.fig1.canvas.draw_idle()
-
-
-    def recompute_thermo(self):
-        """Recompute thermodynamic profiles and cache them"""
-        self.thermo_data = self.compute_thermo()
-
-
-    def recompute_maps(self):
-        """Recompute emission maps and cache them"""
-        self.map_data = self.compute_maps()
     
     
     def update_radial_profiles(self, maps, I_Halpha, I_OIII, I_ff):
@@ -862,41 +846,47 @@ class BowShock:
             traceback.print_exc()
 
         self.fig2.canvas.draw_idle()
+
+
+    # ==========================================================
+    # Interactive parameter handling
+    # ==========================================================
+    
+
+    def get_params_from_sliders(self):
+        """
+        Get current parameter values from sliders and convert to CGS
+        """
+        self.Mdot_msun = 10**self.sliders['Mdot_log'].val
+        self.Mdot = self.Mdot_msun * Msun_yr
+        self.Vw = self.sliders['Vw'].val * 1e5      # km/s -> cm/s
+        self.Vstar = self.sliders['Vstar'].val * 1e5 # km/s -> cm/s
+        self.n_ism = self.sliders['n_ism'].val
+        self.T_ism = self.sliders['T_ism'].val
+        self.r0_str = self.sliders['r0_str'].val
+        self.inclination = self.sliders['inclination'].val
         
+        self.update_lam_from_T_ism()
+        self.update_R_RS_func()
+
 
     def update_all(self, val):
         """
         Recompute and also replot figures
         """
         self.get_params_from_sliders()
-        self.recompute_thermo()
-        self.recompute_maps()
-        self.update_profiles()
-        self.update_maps()
-
-
-    def update_profiles(self):
-        """
-        Update thermodynamics plots
-        """
+        self.thermo_data = self.compute_thermo()
+        self.map_data = self.compute_maps()
         self.update_figure1()
-
-
-    def update_maps(self):
-        """
-        Update emission maps plots
-        """
         self.update_figure2()
-    
+
 
     def delayed_update(self):
-        '''
 
-        '''
         if self._pending_update == 'maps':
             self.get_params_from_sliders()
-            self.recompute_maps()
-            self.update_maps()
+            self.map_data = self.compute_maps()
+            self.update_figure2()
         else:
             self.update_all(None)
 
@@ -919,6 +909,39 @@ class BowShock:
         self._update_timer.start()
 
 
+    def reset_all(self, event):
+        """Reset all sliders to initial values"""
+        self.Mdot_msun = 1e-9
+        self.Mdot = 1e-9 * Msun_yr
+        self.Vw = 100.0 * 1e5
+        self.Vstar = 128.5 * 1e5
+        self.n_ism = 0.2
+        self.T_ism = 8000.0
+        self.r0_str = 1.6
+        self.inclination = 75.0
+        
+        for name, slider in self.sliders.items():
+            if name == 'Mdot_log':
+                val = np.log10(self.Mdot_msun)
+            elif name == 'Vw':
+                val = self.Vw/1e5
+            elif name == 'Vstar':
+                val = self.Vstar/1e5
+            elif name == 'T_ism':
+                val = self.T_ism
+            else:
+                val = getattr(self, name)
+            slider.set_val(val)
+        
+        self.update_lam_from_T_ism()
+        self.update_R_RS_func()
+    
+
+    # ==========================================================
+    # Application
+    # ==========================================================
+
+
     def run(self):
         """Run the application"""
         print("Creating figures...")
@@ -932,6 +955,12 @@ class BowShock:
         print("Showing plots...")
         plt.show()
         print("Done.")
+
+
+# ==========================================================
+# ==========================================================
+# ==========================================================
+# ==========================================================
 
 
 if __name__ == "__main__":

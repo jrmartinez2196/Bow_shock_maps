@@ -1,6 +1,5 @@
-# utils.py
-# Utility functions for projection, radial profiles, and LOS integration
-# Optimized version with proper handling of adiabatic/radiative regimes
+# maps.py
+# Functions for projection, radial profiles, and LOS integration
 
 import numpy as np
 from scipy.interpolate import RegularGridInterpolator
