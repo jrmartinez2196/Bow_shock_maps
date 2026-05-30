@@ -43,6 +43,8 @@ from plot_maps import (
     update_map_limits
 )
 
+from spectral_bands import get_frequency
+
 
 class BowShock:
 
@@ -110,22 +112,8 @@ class BowShock:
         self.r0_str = self.params.get('R_str')
 
         # Frequency for free-free emission [Hz]
-        self.continuum_frequencies = {
-            'low_radio': 325e6,
-            'radio': 3e9,           # 3 GHz - radio
-            'IR': 3e12,             # 3 THz - MIR
-            'optical_R': 4.3e14,    # 700 nm - OP - Red
-            'optical_V': 5.5e14,    # 545 nm - OP - Green
-            'optical_B': 6.9e14,    # 435 nm - OP - Blue
-            'FUV': 2e15,            # 150 nm - FUV
-            'EUV': 3e16,            # 10 nm - Extreme UV
-            'Xray_soft': 3e17,      # 1 keV - Soft X-rays
-            'Xray_hard': 3e18       # 10 keV - Hard X-rays
-        }
-
-        band_name = self.params.get('continuum_band', 'FUV')
-        self.band_name = band_name
-        self.nu_ff = self.continuum_frequencies.get(band_name, self.continuum_frequencies['FUV'])
+        self.band_name = self.params.get('spec_band', 'FUV')
+        self.nu_ff = get_frequency(self.band_name)
 
         # Pre-compute theta grid
         print("Computing theta grid...")
@@ -143,21 +131,14 @@ class BowShock:
         self.xlim_factor = self.params.get('xlim_factor', 15.0)
         self.ylim_factor = self.params.get('ylim_factor', 15.0)
 
-    def get_continuum_bands(self):
-        """Returns the available frequencies to compute free-free emission"""
-        return list(self.continuum_frequencies.keys())
-
     def set_continuum_band(self, band_name):
-        """Modifies the frequency"""
-        if band_name in self.continuum_frequencies:
-            self.band_name = band_name
-            self.nu_ff = self.continuum_frequencies[band_name]
-            print(f"Continuum band changed to {band_name} ({self.nu_ff:.2e} Hz)")
-            if hasattr(self, 'fig2') and self.fig2 is not None:
-                self.update_figure2()
-        else:
-            available = ', '.join(self.get_continuum_bands())
-            raise ValueError(f"Unknown band: {band_name}. Available: {available}")
+        self.band_name = band_name
+        self.nu_ff = get_frequency(band_name)
+
+        print(f"Continuum band changed to {band_name} ({self.nu_ff:.2e} Hz)")
+
+        if self.fig2 is not None:
+            self.update_figure2()
 
 
     def _initialize_plots(self):
@@ -851,7 +832,7 @@ class BowShock:
     # ==========================================================
     # Interactive parameter handling
     # ==========================================================
-    
+
 
     def get_params_from_sliders(self):
         """
@@ -963,81 +944,3 @@ class BowShock:
 # ==========================================================
 
 
-if __name__ == "__main__":
-    import argparse
-    
-    parser = argparse.ArgumentParser(
-        description='Bow Shock Interactive Visualizer',
-        epilog="""
-E.g.:
-  python3 bow_shock.py
-  python3 bow_shock.py --source RXJ0528+2838
-  python3 bow_shock.py --source RXJ0528+2838 --params-dir ./params_file
-  python3 bow_shock.py --list-bands
-
-Available frequencies:
-  low_radio, radio, IR, optical_R, optical_V, optical_B, FUV, EUV, Xray_soft, Xray_hard
-        """
-    )
-    
-    parser.add_argument(
-        '--source', '-s',
-        type=str,
-        default='RXJ0528+2838',
-        help='Source name (default: RXJ0528+2838)'
-    )
-    
-    parser.add_argument(
-        '--params-dir', '-p',
-        type=str,
-        default='Systems',
-        help='Path to parameters file (default: Systems)'
-    )
-    
-    parser.add_argument(
-        '--list-bands', '-l',
-        action='store_true',
-        help='List the available spectrum bands to compute monoenergetic free-free emission'
-    )
-    
-    parser.add_argument(
-        '--band', '-b',
-        type=str,
-        default=None,
-        help='Spectrum band to compute free-free emission (e.g.: FUV, IR, Xray_soft)'
-    )
-
-    parser.add_argument(
-        '--convolve',
-        type=lambda x: x.lower() == 'true',
-        default=True,
-        help='Determines if the emission map is convolved with a Gaussian beam instrument or not'
-    )
-    
-    args = parser.parse_args()
-    
-    if args.list_bands:
-        print("Available spectrum bands to calculate free-free:")
-        bands = {
-            'low_radio': '325 MHz - low freq radio',
-            'radio': '3 GHz - Radio',
-            'IR': '3 THz - Mid infrared',
-            'optical_R': '700 nm - Opt, red',
-            'optical_V': '545 nm - Opt, green',
-            'optical_B': '435 nm - Opt, blue',
-            'FUV': '150 nm - Far ultraviolet',
-            'EUV': '10 nm - Extreme ultraviolet',
-            'Xray_soft': '1 keV - Soft x-rays',
-            'Xray_hard': '10 keV - Hard x-rays'
-        }
-        for band, desc in bands.items():
-            print(f"  {band:12s} : {desc}")
-        sys.exit(0)
-    
-    print(f"Loading. Source: {args.source}, params_dir: {args.params_dir}")
-    app = BowShock(args.source, args.params_dir, convolve=args.convolve)
-    
-    if args.band:
-        app.set_continuum_band(args.band)
-    
-    app.run()
