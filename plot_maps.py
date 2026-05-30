@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 import numpy as np
 
-from utils import arcsecond
+from maps import arcsecond
 
 
 def sanitize_log_data(data):
@@ -342,7 +342,7 @@ def update_map_contours(ax, key, maps, I_data, contours):
         maps['x'],
         maps['y'],
         I_data,
-        levels=np.max(I_data) * np.array([0.05, 0.1, 0.5]),
+        levels=np.max(I_data) * np.array([0.05, 0.1, 0.25, 0.5]),
         colors='lime'
     )
 
