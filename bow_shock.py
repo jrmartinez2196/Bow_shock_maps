@@ -627,12 +627,12 @@ class BowShock:
                 except ValueError:
                     pass
 
-            textbox.on_submit(submit)
-            slider.on_changed(update_text)
-
             # Slider -> textbox
             def update_text(val, tb=textbox):
                 tb.set_val(f'{val:.4g}')
+
+            textbox.on_submit(submit)
+            slider.on_changed(update_text)
 
             self.sliders[name] = slider
             self.textboxes[name] = textbox
