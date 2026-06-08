@@ -117,19 +117,17 @@ class BowShock:
 
         # Pre-compute theta grid
         print("Computing theta grid...")
-        self.theta_grid = np.linspace(0.01, np.deg2rad(170.), 500)
+        self.theta_grid = np.linspace(0.01, np.deg2rad(135.), 500)
         
         # Load initial R_RS function
         print("Loading R_RS function...")
         self.update_R_RS_func()
 
         # Map calculation parameters
-        self.zmax = self.params.get('zmax', 5e15)
+        self.zmax = self.params.get('zmax', 5.*self.get_R0_corrected())
         self.nz = self.params.get('nz', 1000)
         self.nx = self.params.get('nx', 150)
         self.ny = self.params.get('ny', 150)
-        self.xlim_factor = self.params.get('xlim_factor', 15.0)
-        self.ylim_factor = self.params.get('ylim_factor', 15.0)
 
     def set_continuum_band(self, band_name):
         self.band_name = band_name
@@ -341,25 +339,28 @@ class BowShock:
     def compute_maps(self):
         """
         Compute emission maps
-        """
-        print(f"Projected stagnation point distance = {arcsecond(self.get_R0_corrected()*np.cos(np.deg2rad(self.inclination)), self.distance):.1f} ''")
+        """        
         print("Computing maps")
         R0_corrected = self.get_R0_corrected()
+        R0_proj = arcsecond(self.get_R0_corrected()*np.cos(np.deg2rad(self.inclination)), self.distance)
         alpha = self.alpha
         R_str = self.r0_str * R0_corrected           # Stromgren sphere radius
         inclination_rad = np.deg2rad(90 - self.inclination)
         convolve=self.convolve
-        zmax = max(self.zmax, 25. * R0_corrected )
+        print(f"Projected stagnation point distance = {R0_proj:.1f} ''")
+
+        sini = np.sin(np.deg2rad(self.inclination))
 
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-            xmin = -5.*R0_corrected, xmax  = 5.*R0_corrected,
-            ymin = -6.*R0_corrected, ymax = 4.*R0_corrected,
+            xmin = -(2. + 2.*sini**2.)*R0_corrected, xmax = (8. + 2.*sini**2.)*R0_corrected,
+            ymin = -(5. + 2.*sini**2.)*R0_corrected, ymax = (5. + 2.*sini**2.)*R0_corrected,
             nx = self.nx, ny = self.ny,
             R_RS_func = self.R_RS_func,
             inclination=inclination_rad, PA = self.PA,
-            zmax=zmax, nz=self.nz,
-            #fwhm_x=10.5, fwhm_y=20.2, f_ny = 0.7,
-            fwhm_x=54., fwhm_y=77., f_ny = 0.7,
+            zmax=self.zmax, nz=self.nz,
+            fwhm_x=R0_proj*sini**2.,
+            fwhm_y=R0_proj*sini**2.,
+            f_ny = 0.7,
             lmb=self.lmb, R0_phys=R0_corrected,
             T_IL=self.T_IL,
             Vstar=self.Vstar, n_ism=self.n_ism,
@@ -370,25 +371,6 @@ class BowShock:
             distance=self.distance,
             convolve=convolve
         )
-
-        #x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-        #    xmin = -10.*R0_corrected, xmax  = 20.*R0_corrected,
-        #    ymin = -10*R0_corrected, ymax = 20.*R0_corrected,
-        #    nx = self.nx, ny = self.ny,
-        #    R_RS_func = self.R_RS_func,
-        #    inclination=inclination_rad, PA = self.PA,
-        #    zmax=zmax, nz=self.nz,
-        #    fwhm_x=10., fwhm_y=10., f_ny = 0.7,
-        #    lmb=self.lmb, R0_phys=R0_corrected,
-        #    T_IL=self.T_IL,
-        #    Vstar=self.Vstar, n_ism=self.n_ism,
-        #    Mdot=self.Mdot, Vw=self.Vw,
-        #    wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
-        #    R_stromgren=R_str,
-        #    nu_ff=self.nu_ff,
-        #    distance=self.distance,
-        #    convolve=convolve
-        #)
         
         return {
             'x': x_vals_arcsec,
@@ -757,16 +739,11 @@ class BowShock:
 
             R0_pos = compute_R0_position(
                 inclination=self.inclination,
-                PA=self.PA,
                 distance=self.distance,
                 R0_corrected=R0_corrected
             )
 
-            limits = compute_plot_limits(
-                R0_corrected=R0_corrected,
-                distance=self.distance,
-                PA=self.PA
-            )
+            limits = compute_plot_limits(extent,self.PA)
 
             x0 = R0_pos['x_R0']
             y0 = R0_pos['y_R0']
@@ -796,6 +773,7 @@ class BowShock:
                     R0_corrected=R0_corrected,
                     distance=self.distance,
                     band_name=self.band_name,
+                    PA=self.PA,
 
                     images=self.images,
                     colorbars=self.colorbars,
@@ -805,12 +783,12 @@ class BowShock:
                 )
 
             update_map_limits(
-                self.fig2_axes['maps'],
-                limits['xmin'],
-                limits['xmax'],
-                limits['ymin'],
-                limits['ymax']
-            )
+                            self.fig2_axes['maps'],
+                            limits['xmin'],
+                            limits['xmax'],
+                            limits['ymin'],
+                            limits['ymax']
+                        )
 
             self.update_radial_profiles(
                 maps,

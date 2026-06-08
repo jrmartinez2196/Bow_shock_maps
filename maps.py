@@ -223,6 +223,9 @@ def make_projection_maps(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
     result : dict
         Emission maps: I_Halpha, I_OIII, I_ff_total
     """
+
+    print(f'Beam size: {fwhm_x:.1f} arcsec')
+
     lam = 10**lmb
     
     theta_precomp = np.linspace(1e-6, np.pi - 1e-6, 300)
@@ -246,10 +249,10 @@ def make_projection_maps(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
 
 
     # Rotate according to projected angle
-    PA_rot = PA - 90.
-    PA_rot_rad = np.deg2rad(PA_rot)
-    X_rot = X*np.cos(PA_rot_rad) + Y*np.sin(PA_rot_rad)
-    Y_rot = X*np.sin(PA_rot_rad) - Y*np.cos(PA_rot_rad)
+    #PA_rot = PA - 90.
+    #PA_rot_rad = np.deg2rad(PA_rot)
+    #X_rot = X*np.cos(PA_rot_rad) + Y*np.sin(PA_rot_rad)
+    #Y_rot = X*np.sin(PA_rot_rad) - Y*np.cos(PA_rot_rad)
     
     # Convert to arcseconds
     x_vals_arcsec = arcsecond(x_vals, distance)
@@ -257,7 +260,7 @@ def make_projection_maps(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
     
     # LOS projection
     result = los_projection_vectorized(
-        X_rot, Y_rot, R_RS_func, inclination=inclination,
+        X, Y, R_RS_func, inclination=inclination,
         zmax=zmax, nz=nz,
         lmb=lmb, R0_phys=R0_phys,
         R_stromgren=R_stromgren,

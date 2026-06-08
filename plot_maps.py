@@ -1,6 +1,7 @@
 # module: plot_maps.py
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
+from matplotlib.transforms import Affine2D
 import numpy as np
 
 from maps import arcsecond
@@ -55,12 +56,12 @@ def get_norm(data):
 
     vmax = np.max(data)
 
-    vmin = vmax / 500.
+    vmin = vmax / 100.
 
     return LogNorm(vmin=vmin, vmax=1.1 * vmax)
 
 
-def compute_R0_position(inclination, PA, distance, R0_corrected):
+def compute_R0_position(inclination, distance, R0_corrected):
     '''
     Compute the projected position of the apex on the sky.
 
@@ -72,8 +73,6 @@ def compute_R0_position(inclination, PA, distance, R0_corrected):
     inclination : float
         Inclination angle with respect to the plane of the sky
         (inclination = 0 corresponds to an edge-on bow shock).
-    PA : float
-        Position angle measured from north to east (counter-clockwise)
     distance : float
         Source distance [pc]
     R0_corrected : float
@@ -84,67 +83,60 @@ def compute_R0_position(inclination, PA, distance, R0_corrected):
     dict
         Dictionary containing the stellar coordinates
     '''
-
     inc = np.deg2rad(inclination)
 
-    dx = arcsecond(R0_corrected * np.cos(inc),distance)
+    x_R0 = -arcsecond(R0_corrected*np.cos(inc),distance)
 
-    dy = 0.0
-
-    PA_rot = np.deg2rad(PA - 90.)
-
-    x_R0 = -dx * np.cos(PA_rot) - dy * np.sin(PA_rot)
-    y_R0 = -dx * np.sin(PA_rot) + dy * np.cos(PA_rot)
+    y_R0 = 0.0
 
     return {
         'x_R0': x_R0,
         'y_R0': y_R0
     }
 
-def compute_plot_limits(R0_corrected, distance, PA):
-    """
-    Compute plot limits after applying the PA rotation.
+
+def compute_plot_limits(extent, PA):
+    '''
+    Given an image (xmax-xmin)*(ymax-ymin)
+    Calculates the new limits according to PA
 
     Parameters:
     -----------
-    R0_corrected : float
-        RS distance at the apex including thermal pressure [cm].
-    distance : float
-        Source distance [pc]
-    PA : float
-        Position angle measured from north to east (counter-clockwise)
-   
+    extent: list
+    PA: float
+
     Returns:
     --------
     dict
-        Dictionary containing the map limits in arcsec
-    """
+    '''
 
-    xmin_bs = -4. * arcsecond(R0_corrected, distance)
-    xmax_bs =  4. * arcsecond(R0_corrected, distance)
-
-    ymin_bs = -5. * arcsecond(R0_corrected, distance)
-    ymax_bs =  3. * arcsecond(R0_corrected, distance)
+    xmin, xmax, ymin, ymax = extent
 
     PA_rot = np.deg2rad(PA - 90.)
 
     corners = np.array([
-        [xmin_bs, ymin_bs],
-        [xmin_bs, ymax_bs],
-        [xmax_bs, ymin_bs],
-        [xmax_bs, ymax_bs]
+        [xmin, ymin],
+        [xmin, ymax],
+        [xmax, ymin],
+        [xmax, ymax]
     ])
 
-    x_rot = corners[:, 0] * np.cos(PA_rot) - corners[:, 1] * np.sin(PA_rot)
-    y_rot = corners[:, 0] * np.sin(PA_rot) + corners[:, 1] * np.cos(PA_rot)
+    x_rot = (
+        corners[:,0]*np.cos(PA_rot)
+        - corners[:,1]*np.sin(PA_rot)
+    )
+
+    y_rot = (
+        corners[:,0]*np.sin(PA_rot)
+        + corners[:,1]*np.cos(PA_rot)
+    )
 
     return {
         'xmin': np.min(x_rot),
         'xmax': np.max(x_rot),
         'ymin': np.min(y_rot),
-        'ymax': np.max(y_rot),
+        'ymax': np.max(y_rot)
     }
-
 
 def compute_map_extent(maps):
     """
@@ -171,12 +163,13 @@ def compute_map_extent(maps):
     ]
 
 
-def update_map_image(ax, key, I_data, extent, images, colorbars, band_name):
+def update_map_image(ax, key, I_data, extent, images, colorbars, band_name, PA):
     """
     Create or update an emission map image.
 
     If the image does not exist, it is created together with its corresponding colorbar.
     If already exists, it updates the image data, including the normalization
+    Takes into account PA rotation
 
     Parameters
     ----------
@@ -194,6 +187,8 @@ def update_map_image(ax, key, I_data, extent, images, colorbars, band_name):
         Dictionary storing colorbar objects.
     band_name : str
         Simultaed spectral band.
+    PA : float
+        PA angle
     """
 
     img = images[key]
@@ -203,15 +198,19 @@ def update_map_image(ax, key, I_data, extent, images, colorbars, band_name):
     cmap = plt.colormaps['inferno'].copy()
     cmap.set_under('white')
 
+    # PA rotation
+    transform = (Affine2D().rotate_deg_around(0.0, 0.0, PA - 90.)+ ax.transData)
+
     if img is None:
 
         img_obj = ax.imshow(
-            I_data,
-            origin='lower',
-            extent=extent,
-            cmap=cmap,
-            norm=norm
-        )
+                            I_data,
+                            origin='lower',
+                            extent=extent,
+                            cmap=cmap,
+                            norm=norm,
+                            transform=transform
+                        )
 
         images[key] = img_obj
 
@@ -241,6 +240,7 @@ def update_map_image(ax, key, I_data, extent, images, colorbars, band_name):
         img.set_data(I_data)
         img.set_extent(extent)
         img.set_norm(norm)
+        img.set_transform(transform)
 
 
 def update_star_marker(ax, x_star, y_star, key, star_markers):
@@ -281,7 +281,7 @@ def update_star_marker(ax, x_star, y_star, key, star_markers):
 
 
 def update_map_arrow(ax, key, x_star, y_star, x0, y0,
-                    R0_corrected, distance, arrows):
+                    R0_corrected, distance, arrows, PA):
     """
     Create or update the arrow from the star to the apex.
 
@@ -301,22 +301,37 @@ def update_map_arrow(ax, key, x_star, y_star, x0, y0,
         Source distance [pc]
     arrows : dict
         Dictionary storing arrow objects.
+    PA : float
+        Projected angle
     """
 
     if arrows[key] is not None:
         arrows[key].remove()
 
-    arr = ax.arrow(x_star, y_star, x0, y0,
-        color='black',
-        width=0.0, head_width=0.05 * arcsecond(R0_corrected, distance),
-        length_includes_head=True,
-        zorder=5
-    )
+    # PA rotation
+    transform = (
+                Affine2D()
+                .rotate_deg_around(0.0, 0.0, PA - 90.)
+                + ax.transData
+            )
+
+    arr = ax.arrow(
+                x_star,
+                y_star,
+                x0,
+                y0,
+                color='black',
+                width=0.0,
+                head_width=0.05 * arcsecond(R0_corrected, distance),
+                length_includes_head=True,
+                zorder=5,
+                transform=transform
+            )
 
     arrows[key] = arr
 
 
-def update_map_contours(ax, key, maps, I_data, contours):
+def update_map_contours(ax, key, maps, I_data, contours, PA):
     """
     Create or update contour levels over an emission map.
     Contours are drawn at 0.05, 0.1, and 0.5 of the maximum intensity.
@@ -333,17 +348,28 @@ def update_map_contours(ax, key, maps, I_data, contours):
         Intensity map used to compute contours.
     contours : dict
         Dictionary storing contours.
+    PA : float
+        Projected angle
     """
 
     if contours[key] is not None:
-        contours[key].remove()
+        for coll in contours[key].collections:
+            coll.remove()
+
+    # PA rotation
+    transform = (
+                Affine2D()
+                .rotate_deg_around(0.0, 0.0, PA - 90.)
+                + ax.transData
+            )
 
     cont = ax.contour(
         maps['x'],
         maps['y'],
         I_data,
-        levels=np.max(I_data) * np.array([0.05, 0.1, 0.25, 0.5]),
-        colors='lime'
+        levels=np.max(I_data)*np.array([0.1,0.25,0.5]),
+        colors='lime',
+        transform=transform
     )
 
     contours[key] = cont
@@ -371,7 +397,7 @@ def update_map_limits(map_axes, xmin, xmax, ymin, ymax):
 
 def update_map_panel(ax, key, I_data, extent, maps,
                     x_star, y_star, x0, y0,
-                    R0_corrected, distance, band_name,
+                    R0_corrected, distance, band_name, PA,
                     images, colorbars, contours,
                     star_markers, arrows):
     """
@@ -399,6 +425,8 @@ def update_map_panel(ax, key, I_data, extent, maps,
         Source distance [pc].
     band_name : str
         Observing band for free-free emission.
+    PA : float
+        Projected angle (0°-> north, 90°-> east, counterclockwise)
     images : dict
         Dictionary storing image objects.
     colorbars : dict
@@ -411,10 +439,10 @@ def update_map_panel(ax, key, I_data, extent, maps,
         Dictionary storing arrow objects.
     """
 
-    update_map_image(ax, key, I_data, extent, images, colorbars, band_name)
+    update_map_image(ax, key, I_data, extent, images, colorbars, band_name, PA)
 
-    update_map_contours(ax, key, maps, I_data, contours)
+    update_map_contours(ax, key, maps, I_data, contours, PA)
 
     update_star_marker(ax, x_star, y_star, key, star_markers)
 
-    update_map_arrow(ax, key, x_star, y_star, x0, y0, R0_corrected, distance, arrows)
+    update_map_arrow(ax, key, x_star, y_star, x0, y0, R0_corrected, distance, arrows, PA)
