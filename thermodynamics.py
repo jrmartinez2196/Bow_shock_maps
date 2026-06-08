@@ -104,8 +104,6 @@ def vtan(thr, rr, lam=0., shock='RS', Vw=None, Vstar=None):
         if Vstar is None:
             raise ValueError("Vstar must be provided for forward shock")
         V = Vstar * np.maximum(-Az, 0.)
-    else:
-        raise ValueError(f"Unknown shock: {shock}")
     
     return np.maximum(V, 1e-10)
 
@@ -268,7 +266,7 @@ def pre_shock_wind(Mdot, Vw, r_phys, wind_regime='hot', wind_T_fixed=None):
         T_pre = np.full_like(r_phys, 1e4, dtype=float)
     elif wind_regime == 'hot':
         T_pre = 1e5 * (Vw_kms / 2000.0)**2
-        T_pre = np.clip(T_pre, 3e4, 2e6)
+        #T_pre = np.clip(T_pre, 3e4, 2e6)
     elif wind_regime == 'fixed':
         if wind_T_fixed is None:
             raise ValueError("wind_T_fixed must be provided for 'fixed' regime")
@@ -327,12 +325,7 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=1e4, **kwargs):
     H_total : ndarray
         Total shocked layer thickness [cm] (H_hot + H_cold)
     """
-    # Input validation
-    if len(thr) != len(rr):
-        raise ValueError(f"thr and rr must have same length: {len(thr)} vs {len(rr)}")
-    if R0_phys <= 0:
-        raise ValueError(f"R0_phys must be positive: {R0_phys}")
-    
+
     R_phys = rr * R0_phys
     n_points = len(thr)
     
@@ -370,10 +363,10 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=1e4, **kwargs):
     
     # Mach number
     M = v_perp / cs_pre
-    M = np.maximum(M, 1.0)
+    #M = np.maximum(M, 1.0)
     
     # Compression factor (Rankine-Hugoniot)
-    comp = (gamma_ad + 1) * M**2 / ((gamma_ad - 1) * M**2 + 2)
+    comp = (gamma_ad + 1.) * M**2 / ((gamma_ad - 1.) * M**2 + 2.)
     
     # Rankine-Hugoniot post-shock density (hot layer)
     rho_pre = n_pre * mu_pre * mp
@@ -382,9 +375,9 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=1e4, **kwargs):
     cs_post = cs(v_perp, comp)
     
     # Rankine-Hugoniot post-shock temperature (hot layer)
-    T_ratio = ((gamma_ad - 1) * M**2 + 2) * (2 * gamma_ad * M**2 - (gamma_ad - 1)) / ((gamma_ad + 1)**2 * M**2)
+    T_ratio = ((gamma_ad - 1.) * M**2 + 2.) * (2. * gamma_ad * M**2 - (gamma_ad - 1.)) / ((gamma_ad + 1.)**2 * M**2)
     T_RH = T_pre * T_ratio
-    T_RH = np.maximum(T_RH, 1e4)
+    #T_RH = np.maximum(T_RH, 1e4)
     
     # Cooling and advection times
     t_cool = cooling_time(n_RH, T_RH)
@@ -445,16 +438,14 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=1e4, **kwargs):
             # Adiabatic: only hot layer, cold layer = hot layer (no recombination)
             regime[i] = 'adiabatic'
             
-            # Cold layer has same properties as hot layer (no NaN!)
+            # Cold layer = hot layer
             n_rec[i] = n_RH[i]
             T_rec[i] = T_RH[i]
             
             rho_post = n_RH[i] * mu_sh * mp
             denominator = 2.0 * np.pi * R_phys[i] * np.sin(thr[i]) * v_t[i] * rho_post
             
-            if denominator > 0 and i > 0:
-                H_hot[i] = dot_M[i] / denominator
-            H_hot[i] = max(H_hot[i], 0.0)
+            H_hot[i] = dot_M[i] / denominator
             H_cold[i] = 0.0
     
     # Total thickness = hot layer + cold layer
