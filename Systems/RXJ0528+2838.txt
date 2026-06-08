@@ -1,11 +1,11 @@
 {
 	'Mdot' : 1.e-9,
-	'Vw' : 100.,
+	'Vw' : 50.,
 	'Vstar' : 128.5,
 	'n_ism' : 0.2,
 	'dist' : 224.2,	
 	'inclination' : 75.,
 	'PA' : 126.5,
 	'T_ism' : 8.e3,
-	'R_str' : 3.
+	'R_str' : 0.5
 }
