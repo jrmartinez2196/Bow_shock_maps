@@ -157,7 +157,7 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=1e4, *
 def make_projection_maps(xmin, xmax, ymin, ymax, nx, ny, R_RS_func,
                               inclination=0.0, PA = 0.,
                               zmax=5e15, nz=75,
-                              fwhm_x = 1.0, fwhm_y = 1.0, f_ny=0.7,
+                              fwhm_x = 3.0, fwhm_y = 3.0, f_ny=0.5,
                               lmb=0.0, R0_phys=1.0,
                               rs_radiative=None, fs_radiative=None,
                               T_IL=1e4,
@@ -542,9 +542,9 @@ def convolution(result, x_vals_arcsec, y_vals_arcsec,
     sigma_y = fwhm_to_sigma(fwhm_y)
 
     if (dx > f_ny * fwhm_x):
-        raise ValueError(f'Map resolution is to low! dx = {dx:.1f} arcsec, allowed dx <= {f_ny*fwhm_x:.1f} arcsec')
+        raise ValueError(f'Map resolution is too low! dx = {dx:.1f} arcsec, allowed dx <= {f_ny*fwhm_x:.1f} arcsec')
     elif (dy > f_ny * fwhm_y):
-        raise ValueError(f'Map resolution is to low! dy = {dy:.1f} arcsec, allowed dy <= {f_ny*fwhm_y:.1f} arcsec')
+        raise ValueError(f'Map resolution is too low! dy = {dy:.1f} arcsec, allowed dy <= {f_ny*fwhm_y:.1f} arcsec')
 
     # Convert beam size to pixels
     sigma_x_pix = sigma_x / dx
