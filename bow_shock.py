@@ -125,7 +125,7 @@ class BowShock:
 
         # Map calculation parameters
         self.zmax = self.params.get('zmax', 5.*self.get_R0_corrected())
-        self.nz = self.params.get('nz', 1000)
+        self.nz = self.params.get('nz', 500)
         self.nx = self.params.get('nx', 150)
         self.ny = self.params.get('ny', 150)
 
@@ -352,15 +352,15 @@ class BowShock:
         sini = np.sin(np.deg2rad(self.inclination))
 
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-            xmin = -(2. + 2.*sini**2.)*R0_corrected, xmax = (8. + 2.*sini**2.)*R0_corrected,
-            ymin = -(5. + 2.*sini**2.)*R0_corrected, ymax = (5. + 2.*sini**2.)*R0_corrected,
+            xmin = -(2. + 2.*sini**2)*R0_corrected, xmax = (8. + 2.*sini**2)*R0_corrected,
+            ymin = -(5. + 2.*sini**2)*R0_corrected, ymax = (5. + 2.*sini**2)*R0_corrected,
             nx = self.nx, ny = self.ny,
             R_RS_func = self.R_RS_func,
             inclination=inclination_rad, PA = self.PA,
             zmax=self.zmax, nz=self.nz,
-            fwhm_x=R0_proj*sini**2.,
-            fwhm_y=R0_proj*sini**2.,
-            f_ny = 0.7,
+            fwhm_x=R0_proj,
+            fwhm_y=R0_proj,
+            f_ny = 0.5,
             lmb=self.lmb, R0_phys=R0_corrected,
             T_IL=self.T_IL,
             Vstar=self.Vstar, n_ism=self.n_ism,
