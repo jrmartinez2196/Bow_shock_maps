@@ -535,12 +535,12 @@ class BowShock:
     
     def create_sliders(self):
         """Create sliders in a separate window"""
-        self.fig_sliders = plt.figure(figsize=(12, 8))
-        self.fig_sliders.suptitle('Bow Shock Parameters', fontsize=16)
+        self.fig_sliders = plt.figure(figsize=(8, 4))
+        self.fig_sliders.suptitle('Bow Shock Parameters', fontsize=15)
         self.textboxes = {}
         
         start_y = 0.85
-        spacing = 0.055
+        spacing = 0.06
         
         all_params = [
             ('Mdot_log', r'log₁₀(Mdot [M☉/yr])', (-12, -5), np.log10(self.Mdot_msun)),
@@ -558,7 +558,7 @@ class BowShock:
             y = start_y - i*spacing
 
             # Slider axis
-            slider_ax = self.fig_sliders.add_axes([0.15, y, 0.55, 0.04])
+            slider_ax = self.fig_sliders.add_axes([0.18, y, 0.45, 0.04])
 
             # Textbox axis
             text_ax = self.fig_sliders.add_axes([0.75, y, 0.12, 0.04])
@@ -580,14 +580,14 @@ class BowShock:
                     vrange[0],
                     vrange[1],
                     valinit=valinit,
-                    valfmt='%.4f'
+                    valfmt='%.3f'
                 )
 
             # Create textbox
             textbox = TextBox(
                 text_ax,
                 '',
-                initial=f'{valinit:.4g}'
+                initial=f'{valinit:.3g}'
             )
 
             # Slider updates plots
@@ -608,7 +608,7 @@ class BowShock:
             # Slider -> textbox
             def update_text(val, tb=textbox):
                 tb.eventson = False
-                tb.set_val(f'{val:.4g}')
+                tb.set_val(f'{val:.3g}')
                 tb.eventson = True
 
             textbox.on_submit(submit)
