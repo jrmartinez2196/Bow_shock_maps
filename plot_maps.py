@@ -353,8 +353,7 @@ def update_map_contours(ax, key, maps, I_data, contours, PA):
     """
 
     if contours[key] is not None:
-        for coll in contours[key].collections:
-            coll.remove()
+        contours[key].remove()
 
     # PA rotation
     transform = (
