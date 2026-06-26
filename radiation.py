@@ -1,11 +1,12 @@
 # radiation.py
 import numpy as np
 from gaunt_factor import GauntFactor
-from constants import h, kB, sr_per_arcsec2, Rayleigh
+from constants import h, kB, sr_per_arcsec2, Rayleigh, qe, me, mec2, c
+from scipy.special import gamma
 
 def emissivity_Halpha(n, T, ion_H=1.):
     """
-    H_alpha [R]
+    H_alpha [R cm^-1]
     Mackey+ 2013
     """
     n_arr = np.asarray(n, dtype=float)
@@ -15,7 +16,7 @@ def emissivity_Halpha(n, T, ion_H=1.):
     n_arr = np.maximum(n_arr, 0.0)
     T_arr = np.maximum(T_arr, 1e4)
     
-    j_arcsec2 = 2.85e-33 * T_arr**-0.9 * (ion_H*n_arr)**2
+    j_arcsec2 = 2.85e-33 * T_arr**-0.9 * (ion_H*n_arr)**2   # erg/s/cm3/arcsec^2
 
     return j_arcsec2/Rayleigh
 
@@ -24,6 +25,7 @@ def emissivity_OIII(n, T, ion_H = 1., ion_O=1.):
     """
     [O III] λ5007 [erg s^-1 cm^-3 arcsec^-2]
     Osterbrock & Ferland 2006
+    Valid for densities < 10^4 cm^-3
     """
     n_arr = np.asarray(n, dtype=float)
     T_arr = np.asarray(T, dtype=float)
@@ -43,9 +45,9 @@ def emissivity_OIII(n, T, ion_H = 1., ion_O=1.):
     
     # O2+ fraction (4.57e-4 assuming solar abundances, Gnat & Sternberg 2007)
     n_e = ion_H * n_arr
-    no_ion2 = 4.57e-4 * n_arr * ion_O
+    n_OIII = 4.57e-4 * n_arr * ion_O
     
-    n2 = no_ion2 * n_e * q12 / A21
+    n2 = n_OIII * n_e * q12 / A21
     
     # Emissivity
     j = (h * nu / (4 * np.pi)) * n2 * A21 / sr_per_arcsec2
@@ -53,9 +55,9 @@ def emissivity_OIII(n, T, ion_H = 1., ion_O=1.):
     return j
 
 
-def emissivity_freefree(n, T, ion_H, Z_q, nu, gaunt_lookup):
+def nu_emissivity_freefree(n, T, ion_H, Z_q, nu, gaunt_lookup):
     """
-    Free-free emissivity [erg s^-1 cm^-3 arcsec^-2]
+    Free-free emissivity multiplied by frequency (nu*j_nu) [erg s^-1 cm^-3 arcsec^-2]
     It uses a precomputed lookup table for the gaunt factors
     """
     n_arr = np.asarray(n, dtype=float)
@@ -67,11 +69,11 @@ def emissivity_freefree(n, T, ion_H, Z_q, nu, gaunt_lookup):
     
     # Emissivity calculation
     exp_factor = np.exp(-h * nu / (kB * T_arr))
-    C_j = (6.8e-38 / (4 * np.pi)) * Z_q**2 * nu
-    j = C_j * (n_arr*ion_H)**2 * exp_factor * gaunt / np.sqrt(T_arr) / sr_per_arcsec2
-    j_mJy = j / (1e-26 * nu) # Radio mJy per arcsec^2
+    C_j = (6.8e-38 / (4 * np.pi)) * Z_q**2
+    j = C_j * (n_arr*ion_H)**2 * exp_factor * gaunt / np.sqrt(T_arr) / sr_per_arcsec2 # erg/s/cm^3/arcsec^2/Hz
+    j_mJy = j / (1e-26) # Radio mJy/cm/arcsec^2
     
-    return j, j_mJy
+    return nu*j, j_mJy
 
 def precompute_gaunt_for_temperatures(nu_ff, Z):
     """
@@ -91,3 +93,56 @@ def precompute_gaunt_for_temperatures(nu_ff, Z):
         return np.interp(logT_clipped, logT_values, gaunt_values)
     
     return gaunt_lookup
+
+def nu_emissivity_sync(k0, B, p_inj, nu):
+    """
+    Synchrotron emissivity multiplied by frequency (nu*j_nu) [erg s^-1 cm^-3 arcsec^-2]
+
+    Parameters:
+    -----------
+    k0 : float or array
+        Electron energy distribution (n [1/erg/cm^3]) normalization
+    B : float or array
+        Post shock magnetic field
+    p_inj : float
+        Spectral index of the electron power law distribution
+        Prescription only valid for p_inj > 2
+        We assume p_inj = p, as advection dominates.
+    nu : float
+        Frequency
+
+    Returns:
+    --------
+    nu*j_syn_arcsec : array
+        [erg s^-1 cm^-3 arcsec^-2]
+    j_syn_mJy
+        [mJy/cm/arcsec^2]
+    """
+
+    eps = h*nu
+
+    a_syn = cte_syn(p_inj)
+    cte_s = qe**3. / (h*mec2) * (3.*h*qe/(4.*np.pi*me**3.*c**5.))**((p_inj-1.)/2.)
+
+    j_syn = a_syn * cte_s * k0 * B**((p_inj+1.)/2.) * eps**(-(p_inj-1.)/2.) * eps/nu   # erg/s/cm^3/sr/Hz
+
+    j_syn_arcsec = j_syn / sr_per_arcsec2 # erg/s/cm^3/arcsec^2/Hz
+
+    j_syn_mJy = j_syn_arcsec / (1e-26)      # mJy/cm/arcsec^2
+
+    return nu*j_syn_arcsec, j_syn_mJy
+
+def cte_syn(p):
+    '''
+    Calculates a constant of the synchrotron emissivity as a function of electron spectral index
+
+    Parameter:
+    ----------
+    p : float
+        Distribution spectral index
+    '''
+
+    a_num =  2.**((p-1.)/2.) * np.sqrt(3) * gamma((3.*p-1.)/12.) * gamma((3.*p+19.)/12.) * gamma((p+5.)/4.)
+    a_den = 8. * np.sqrt(np.pi) * (p+1.) * gamma((p+7.)/4.)
+
+    return a_num/a_den

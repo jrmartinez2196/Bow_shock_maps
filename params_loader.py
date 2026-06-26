@@ -48,7 +48,7 @@ def load_params_from_file(filename):
             params = eval(content_clean)
     
     # Ensure numeric types for all numeric parameters
-    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'PA', 'T_ism', 'R_str']
+    numeric_keys = ['Mdot', 'Vw', 'Vstar', 'n_ism', 'dist', 'inclination', 'PA', 'T_ism', 'R_str', 'f_NTp', 'f_NTe', 'f_B']
     for key in numeric_keys:
         if key in params:
             params[key] = float(params[key])

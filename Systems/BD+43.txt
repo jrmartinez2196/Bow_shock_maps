@@ -1,11 +1,14 @@
 {
-	'Mdot' : 1.e-5,
+	'Mdot' : 4.e-6,
 	'Vw' : 3000.,
 	'Vstar' : 50,
-	'n_ism' : 9.,
+	'n_ism' : 6.,
 	'dist' : 1.7e3,	
 	'inclination' : 30.,
 	'PA' : 351.5,
 	'T_ism' : 8.e3,
-	'R_str' : 10.
+	'R_str' : 10.,
+	'f_NTp' : 0.1,
+	'f_NTe' : 0.01,
+	'f_B' : 0.1
 }

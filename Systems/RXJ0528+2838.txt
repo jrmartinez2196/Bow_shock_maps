@@ -7,5 +7,8 @@
 	'inclination' : 75.,
 	'PA' : 126.5,
 	'T_ism' : 8.e3,
-	'R_str' : 0.5
+	'R_str' : 1.,
+	'f_NTp' : 0.1,
+	'f_NTe' : 0.01,
+	'f_B' : 0.1
 }

@@ -214,7 +214,7 @@ def update_map_image(ax, key, I_data, extent, images, colorbars, band_name, PA):
 
         images[key] = img_obj
 
-        if key == 'ff' and (band_name == 'radio' or band_name == 'low_radio'):
+        if (key == 'ff' or key == ' syn' or key == 'continuum') and (band_name == 'radio' or band_name == 'low_radio'):
 
             cbar_label = r'Surface brightness [mJy beam$^{-1}$]'
 

@@ -15,19 +15,19 @@ from matplotlib.colors import LogNorm
 from scipy.interpolate import interp1d
 from pathlib import Path
 
-from constants import AU, pc, Msun_yr, mu, mp, mu_sh, h, kB
+from constants import AU, pc, Msun_yr, mu, mp, mu_sh, h, kB, gamma_ad
 from params_loader import get_source_params, validate_params
 from bow_shock_surface import (
     standoff_distance,
     integrate_r_theta_christie,
 )
+from globals import(
+    nx, ny, nz, zmax, max_theta)
 from thermodynamics import (
     post_shock_conditions,
     vnorm_forward,
     vnorm_wind,
-    vtan,
-    cooling_time,
-    advection_time
+    vtan
 )
 from maps import (
     make_projection_maps,
@@ -88,6 +88,14 @@ class BowShock:
         # Initialize T_ism (will be controlled by slider)
         self.T_ism = self.params.get('T_ism', 8.e3)
 
+        # Non-thermal parameters
+        self.f_NTp = self.params.get('f_NTp', 0.1)
+        self.f_NTe = self.params.get('f_NTe', 0.01)
+        self.p_inj = self.params.get('p_inj', 2.5)
+
+        # Magnetic field
+        self.f_B = self.params.get('f_B', 0.1)
+
         print(f"Loaded parameters for {source_name}")
         print(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
         print(f"  Vw = {self.Vw/1e5:.1f} km/s")
@@ -117,17 +125,17 @@ class BowShock:
 
         # Pre-compute theta grid
         print("Computing theta grid...")
-        self.theta_grid = np.linspace(0.01, np.deg2rad(135.), 500)
+        self.theta_grid = np.linspace(0.01, max_theta, 500)
         
         # Load initial R_RS function
         print("Loading R_RS function...")
         self.update_R_RS_func()
 
         # Map calculation parameters
-        self.zmax = self.params.get('zmax', 5.*self.get_R0_corrected())
-        self.nz = self.params.get('nz', 500)
-        self.nx = self.params.get('nx', 150)
-        self.ny = self.params.get('ny', 150)
+        self.zmax = zmax*self.get_R0_corrected()
+        self.nz = nz
+        self.nx = nx
+        self.ny = ny
 
     def set_continuum_band(self, band_name):
         self.band_name = band_name
@@ -222,7 +230,7 @@ class BowShock:
         theta_vals, r_vals = integrate_r_theta_christie(
             self.lam, 
             R0=1.0, 
-            theta_max=np.pi - 1e-5,
+            theta_max=max_theta,
             n_theta=800,
             eps_start=1e-6
         )
@@ -275,7 +283,7 @@ class BowShock:
         alpha = self.alpha
         lam = self.lam
         
-        thr, rr_norm = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=np.pi)
+        thr, rr_norm = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=max_theta)
         
         r_interp = interp1d(thr, rr_norm, bounds_error=False, fill_value=1.0)
         rr = r_interp(self.theta_grid)
@@ -283,14 +291,18 @@ class BowShock:
 
         n_wind = self.Mdot/(4.*np.pi*(rr*R0_corrected)**2*self.Vw)/mu_sh/mp
         
-        n_RS, T_RS, n_rec_RS, T_rec_RS, regime_RS, H_hot_RS, H_cold_RS, H_total_RS = post_shock_conditions(
+        (n_RS, T_RS, n_rec_RS, T_rec_RS, pressure_RS, regime_RS, 
+        H_hot_RS, H_cold_RS, H_total_RS,
+        t_cool_RS, t_adv_RS) = post_shock_conditions(
             self.theta_grid, rr, 'RS', R0_corrected,
             T_IL=self.T_IL,
             Mdot=self.Mdot, Vw=self.Vw, lam=lam,
             wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed
         )
         
-        n_FS, T_FS, n_rec_FS, T_rec_FS, regime_FS, H_hot_FS, H_cold_FS, H_total_FS = post_shock_conditions(
+        (n_FS, T_FS, n_rec_FS, T_rec_FS, pressure_FS, regime_FS,
+        H_hot_FS, H_cold_FS, H_total_FS,
+        t_cool_FS, t_adv_FS) = post_shock_conditions(
             self.theta_grid, rr, 'FS', R0_corrected,
             T_IL=self.T_IL,
             Vstar=self.Vstar, n_ism=self.n_ism, lam=lam
@@ -308,19 +320,14 @@ class BowShock:
         
         H_R_norm_RS = H_total_RS / (rr * R0_corrected)
         H_R_norm_FS = H_total_FS / (rr * R0_corrected)
-        
+
         v_perp_RS = vnorm_wind(self.theta_grid, rr, lam, self.Vw)
         v_perp_FS = vnorm_forward(self.theta_grid, rr, lam, self.Vstar)
         v_tan_RS = vtan(self.theta_grid, rr, lam, shock='RS', Vw=self.Vw)
         v_tan_FS = vtan(self.theta_grid, rr, lam, shock='FS', Vstar=self.Vstar)
         
-        t_cool_RS = cooling_time(n_RS, T_RS)
-        t_adv_RS = advection_time(self.theta_grid, rr, R0_corrected, (n_RS/n_wind), lam, shock='RS', Vw=self.Vw)
-        ratio_RS = t_cool_RS / np.maximum(t_adv_RS, 1e-10)
-        
-        t_cool_FS = cooling_time(n_FS, T_FS)
-        t_adv_FS = advection_time(self.theta_grid, rr, R0_corrected, (n_FS*mu_sh)/(self.n_ism*mu), lam, shock='FS', Vstar=self.Vstar)
-        ratio_FS = t_cool_FS / np.maximum(t_adv_FS, 1e-10)
+        ratio_RS = t_cool_RS / t_adv_RS
+        ratio_FS = t_cool_FS / t_adv_FS
         
         return {
             'theta': self.theta_grid,
@@ -339,6 +346,8 @@ class BowShock:
     def compute_maps(self):
         """
         Compute emission maps
+
+
         """        
         print("Computing maps")
         R0_corrected = self.get_R0_corrected()
@@ -352,9 +361,10 @@ class BowShock:
         sini = np.sin(np.deg2rad(self.inclination))
 
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-            xmin = -(2. + 2.*sini**2)*R0_corrected, xmax = (8. + 2.*sini**2)*R0_corrected,
+            xmin = -(3. + 2.*sini**2)*R0_corrected, xmax = (7. + 2.*sini**2)*R0_corrected,
             ymin = -(5. + 2.*sini**2)*R0_corrected, ymax = (5. + 2.*sini**2)*R0_corrected,
             nx = self.nx, ny = self.ny,
+            theta_max = max_theta,
             R_RS_func = self.R_RS_func,
             inclination=inclination_rad, PA = self.PA,
             zmax=self.zmax, nz=self.nz,
@@ -366,19 +376,24 @@ class BowShock:
             Vstar=self.Vstar, n_ism=self.n_ism,
             Mdot=self.Mdot, Vw=self.Vw,
             wind_regime=self.wind_regime, wind_T_fixed=self.wind_T_fixed,
+            f_NTp=self.f_NTp, f_NTe=self.f_NTe,
+            p_inj=self.p_inj,
+            f_B=self.f_B,
             R_stromgren=R_str,
             nu_ff=self.nu_ff,
             distance=self.distance,
             convolve=convolve
         )
-        
+
         return {
             'x': x_vals_arcsec,
             'y': y_vals_arcsec,
             'I_Halpha': result['I_Halpha'],
             'I_OIII': result['I_OIII'],
             'I_ff_total': result['I_ff_total'],
-            'I_ff_mJy' : result['I_ff_mJy']
+            'I_ff_mJy' : result['I_ff_mJy'],
+            'I_syn_total': result['I_syn_total'],
+            'I_syn_mJy': result['I_syn_mJy']
         }
 
 
@@ -392,21 +407,21 @@ class BowShock:
         self.fig1.suptitle('Bow Shock Profiles', fontsize=16)
         
         ax1 = self.fig1.add_subplot(3, 2, 1)
-        ax1.set_xlabel(r'$\theta$ [rad]')
+        ax1.set_xlabel(r'$\theta$ [°]')
         ax1.set_ylabel(r'Density [cm$^{-3}$]')
         ax1.set_yscale('log')
         ax1.set_title('Post-shock Density')
         ax1.grid(True, alpha=0.3)
         
         ax2 = self.fig1.add_subplot(3, 2, 2)
-        ax2.set_xlabel(r'$\theta$ [rad]')
+        ax2.set_xlabel(r'$\theta$ [°]')
         ax2.set_ylabel(r'Temperature [K]')
         ax2.set_yscale('log')
         ax2.set_title('Post-shock Temperature')
         ax2.grid(True, alpha=0.3)
         
         ax3 = self.fig1.add_subplot(3, 2, 3)
-        ax3.set_xlabel(r'$\theta$ [rad]')
+        ax3.set_xlabel(r'$\theta$ [°]')
         ax3.set_ylabel(r'H/R')
         ax3.set_yscale('log')
         ax3.set_ylim(1e-2,1.)
@@ -414,13 +429,13 @@ class BowShock:
         ax3.grid(True, alpha=0.3)
         
         ax4 = self.fig1.add_subplot(3, 2, 4)
-        ax4.set_xlabel(r'$\theta$ [rad]')
+        ax4.set_xlabel(r'$\theta$ [°]')
         ax4.set_ylabel(r'Velocity [km/s]')
         ax4.set_title('Velocities')
         ax4.grid(True, alpha=0.3)
         
         ax5 = self.fig1.add_subplot(3, 1, 3)
-        ax5.set_xlabel(r'$\theta$ [rad]')
+        ax5.set_xlabel(r'$\theta$ [°]')
         ax5.set_ylabel(r'$t_{cool} / t_{adv}$')
         ax5.set_yscale('log')
         ax5.set_title('Cooling to Advection Time Ratio')
@@ -466,27 +481,27 @@ class BowShock:
     def create_figure2(self):
         self.fig2 = plt.figure(figsize=(15, 12))
         self.fig2.suptitle('Emission Maps and Radial Profiles', fontsize=16)
-        self.star_markers = {'Halpha': None, 'OIII': None, 'ff': None}
-        self.arrows = {'Halpha': None, 'OIII': None, 'ff': None}
+        self.star_markers = {'Halpha': None, 'OIII': None, 'continuum': None}
+        self.arrows = {'Halpha': None, 'OIII': None, 'continuum': None}
         
         # Top row: maps
         ax_Halpha = self.fig2.add_subplot(2, 3, 1)
         ax_OIII = self.fig2.add_subplot(2, 3, 2)
-        ax_ff = self.fig2.add_subplot(2, 3, 3)
+        ax_cont = self.fig2.add_subplot(2, 3, 3)
 
         # Contour leves
         self.contours = {
             'Halpha': None,
             'OIII': None,
-            'ff': None
+            'continuum': None
         }
        
         # Bottom row: radial profiles
         ax_radial_profiles = self.fig2.add_subplot(2, 3, (4,6))
         
         # Configure map axes
-        for ax, title in zip([ax_Halpha, ax_OIII, ax_ff], 
-                           [r'H$\alpha$', '[O III]', 'Free-free']):
+        for ax, title in zip([ax_Halpha, ax_OIII, ax_cont], 
+                           [r'H$\alpha$', '[O III]', 'Free-free + synchrotron']):
             ax.set_xlabel('x [arcsec]')
             ax.set_ylabel('y [arcsec]')
             ax.set_title(title)
@@ -497,11 +512,10 @@ class BowShock:
         ax_radial_profiles.set_title('Normalizaed radial Emission Profiles')
         ax_radial_profiles.set_xlabel('Radius [arcsec]')
         ax_radial_profiles.set_ylabel('')
-        ax_radial_profiles.set_xlim(0,500)
         
         # Store axes and images
         self.fig2_axes = {
-            'maps': [ax_Halpha, ax_OIII, ax_ff],
+            'maps': [ax_Halpha, ax_OIII, ax_cont],
             'profiles' : ax_radial_profiles
         }
         
@@ -509,24 +523,26 @@ class BowShock:
         self.images = {
             'Halpha': None,
             'OIII': None,
-            'ff': None
+            'continuum': None
         }
         
         self.colorbars = {
             'Halpha': None,
             'OIII': None,
-            'ff': None
+            'continuum': None
         }
         
         self.profiles = {
             'Halpha': None,
             'OIII': None,
-            'ff': None
+            'ff':None,
+            'syn': None
         }
 
         self.profiles['Halpha'], = self.fig2_axes['profiles'].plot([], [], 'r-', linewidth=2, label=r'H$\alpha$')
         self.profiles['OIII'], = self.fig2_axes['profiles'].plot([], [], 'g-.', linewidth=2, label='[O III]')
         self.profiles['ff'], = self.fig2_axes['profiles'].plot([], [], 'b--', linewidth=2, label='Free-free')
+        self.profiles['syn'], = self.fig2_axes['profiles'].plot([], [], 'b:', linewidth=2, label='Synchrotron')
 
         self.fig2_axes['profiles'].legend()
        
@@ -548,6 +564,8 @@ class BowShock:
             ('Vstar', 'Vstar [km/s]', (10, 500), self.Vstar/1e5),
             ('n_ism', 'n_ISM [cm⁻³]', (0.01, 10.0), self.n_ism),
             ('T_ism', 'T_ISM [K]', (100, 1.e6), self.T_ism),
+            ('f_NTe', 'f_NTe', (1e-3, 1.), self.f_NTe),
+            ('f_B', 'f_B', (1e-3, 1.), self.f_B),
             ('r0_str', 'R_str/R0', (0.9, 10.), self.r0_str),
             ('inclination', 'Inclination [°]', (0, 90), self.inclination),
         ]
@@ -636,31 +654,32 @@ class BowShock:
 
     def update_figure1(self):
         prof = self.thermo_data
+        theta_deg = np.degrees(prof['theta'])
         
-        self.lines['fig1']['n_RS_hot'].set_data(prof['theta'], prof['n_RS_hot'])
-        self.lines['fig1']['n_RS_cold'].set_data(prof['theta'], prof['n_RS_cold'])
-        self.lines['fig1']['n_FS_hot'].set_data(prof['theta'], prof['n_FS_hot'])
-        self.lines['fig1']['n_FS_cold'].set_data(prof['theta'], prof['n_FS_cold'])
+        self.lines['fig1']['n_RS_hot'].set_data(theta_deg, prof['n_RS_hot'])
+        self.lines['fig1']['n_RS_cold'].set_data(theta_deg, prof['n_RS_cold'])
+        self.lines['fig1']['n_FS_hot'].set_data(theta_deg, prof['n_FS_hot'])
+        self.lines['fig1']['n_FS_cold'].set_data(theta_deg, prof['n_FS_cold'])
         
-        self.lines['fig1']['T_RS_hot'].set_data(prof['theta'], prof['T_RS_hot'])
-        self.lines['fig1']['T_RS_cold'].set_data(prof['theta'], prof['T_RS_cold'])
-        self.lines['fig1']['T_FS_hot'].set_data(prof['theta'], prof['T_FS_hot'])
-        self.lines['fig1']['T_FS_cold'].set_data(prof['theta'], prof['T_FS_cold'])
+        self.lines['fig1']['T_RS_hot'].set_data(theta_deg, prof['T_RS_hot'])
+        self.lines['fig1']['T_RS_cold'].set_data(theta_deg, prof['T_RS_cold'])
+        self.lines['fig1']['T_FS_hot'].set_data(theta_deg, prof['T_FS_hot'])
+        self.lines['fig1']['T_FS_cold'].set_data(theta_deg, prof['T_FS_cold'])
         
-        self.lines['fig1']['H_RS_hot'].set_data(prof['theta'], prof['H_RS_hot'])
-        self.lines['fig1']['H_RS_cold'].set_data(prof['theta'], prof['H_RS_cold'])
-        self.lines['fig1']['H_RS_total'].set_data(prof['theta'], prof['H_RS_total'])
-        self.lines['fig1']['H_FS_hot'].set_data(prof['theta'], prof['H_FS_hot'])
-        self.lines['fig1']['H_FS_cold'].set_data(prof['theta'], prof['H_FS_cold'])
-        self.lines['fig1']['H_FS_total'].set_data(prof['theta'], prof['H_FS_total'])
+        self.lines['fig1']['H_RS_hot'].set_data(theta_deg, prof['H_RS_hot'])
+        self.lines['fig1']['H_RS_cold'].set_data(theta_deg, prof['H_RS_cold'])
+        self.lines['fig1']['H_RS_total'].set_data(theta_deg, prof['H_RS_total'])
+        self.lines['fig1']['H_FS_hot'].set_data(theta_deg, prof['H_FS_hot'])
+        self.lines['fig1']['H_FS_cold'].set_data(theta_deg, prof['H_FS_cold'])
+        self.lines['fig1']['H_FS_total'].set_data(theta_deg, prof['H_FS_total'])
         
-        self.lines['fig1']['v_perp_RS'].set_data(prof['theta'], prof['v_perp_RS']/1e5)
-        self.lines['fig1']['v_tan_RS'].set_data(prof['theta'], prof['v_tan_RS']/1e5)
-        self.lines['fig1']['v_perp_FS'].set_data(prof['theta'], prof['v_perp_FS']/1e5)
-        self.lines['fig1']['v_tan_FS'].set_data(prof['theta'], prof['v_tan_FS']/1e5)
+        self.lines['fig1']['v_perp_RS'].set_data(theta_deg, prof['v_perp_RS']/1e5)
+        self.lines['fig1']['v_tan_RS'].set_data(theta_deg, prof['v_tan_RS']/1e5)
+        self.lines['fig1']['v_perp_FS'].set_data(theta_deg, prof['v_perp_FS']/1e5)
+        self.lines['fig1']['v_tan_FS'].set_data(theta_deg, prof['v_tan_FS']/1e5)
         
-        self.lines['fig1']['ratio_RS'].set_data(prof['theta'], prof['ratio_RS'])
-        self.lines['fig1']['ratio_FS'].set_data(prof['theta'], prof['ratio_FS'])
+        self.lines['fig1']['ratio_RS'].set_data(theta_deg, prof['ratio_RS'])
+        self.lines['fig1']['ratio_FS'].set_data(theta_deg, prof['ratio_FS'])
         
         all_ratios = np.concatenate([prof['ratio_RS'][np.isfinite(prof['ratio_RS'])],
                                       prof['ratio_FS'][np.isfinite(prof['ratio_FS'])]])
@@ -669,7 +688,7 @@ class BowShock:
             ymax = np.max(all_ratios) * 2
             self.fig1_axes[4].set_ylim(ymin, ymax)
         
-        self.fig1_axes[4].set_xlim(0, np.max(prof['theta']))
+        self.fig1_axes[4].set_xlim(0, np.max(theta_deg))
         
         for i, ax in enumerate(self.fig1_axes[:4]):
             ax.relim()
@@ -681,7 +700,7 @@ class BowShock:
         self.fig1.canvas.draw_idle()
     
     
-    def update_radial_profiles(self, maps, I_Halpha, I_OIII, I_ff):
+    def update_radial_profiles(self, maps, I_Halpha, I_OIII, I_ff, I_syn):
         """
         Update normalized radial emission profiles
         """
@@ -689,25 +708,35 @@ class BowShock:
         if not np.any(I_Halpha > 0):
             return
 
+        r_max = np.max(np.abs(maps['x']))
+
         r_prof, prof_Halpha = radial_profile(maps['x'], maps['y'], I_Halpha,
-            dX=0.0, nbins=50, r_min=0.0, r_max=500.0
+            dX=0.0, nbins=50, r_min=0.0, r_max=r_max
         )
 
         _, prof_OIII = radial_profile(maps['x'], maps['y'], I_OIII,
-            dX=0.0, nbins=50, r_min=0.0, r_max=500.0
+            dX=0.0, nbins=50, r_min=0.0, r_max=r_max
         )
 
         _, prof_ff = radial_profile(maps['x'], maps['y'], I_ff,
-            dX=0.0, nbins=50, r_min=0.0, r_max=500.0
+            dX=0.0, nbins=50, r_min=0.0, r_max=r_max
         )
+
+        _, prof_syn = radial_profile(maps['x'], maps['y'], I_syn,
+            dX=0.0, nbins=50, r_min=0.0, r_max=r_max
+        )
+
+        prof_continuum = prof_ff + prof_syn
 
         prof_Halpha_norm = prof_Halpha / np.max(prof_Halpha)
         prof_OIII_norm = prof_OIII / np.max(prof_OIII)
         prof_ff_norm = prof_ff / np.max(prof_ff)
+        prof_syn_norm = prof_syn / np.max(prof_syn)
 
         self.profiles['Halpha'].set_data(r_prof, prof_Halpha_norm)
         self.profiles['OIII'].set_data(r_prof, prof_OIII_norm)
         self.profiles['ff'].set_data(r_prof, prof_ff_norm)
+        self.profiles['syn'].set_data(r_prof, prof_syn_norm)
 
         self.fig2_axes['profiles'].set_ylim(0, 1.1)
         self.fig2_axes['profiles'].set_ylabel('Normalized Intensity')
@@ -731,7 +760,15 @@ class BowShock:
                 else 'I_ff_total'
             )
 
+            syn_key = (
+                'I_syn_mJy'
+                if self.band_name in ('radio', 'low_radio')
+                else 'I_syn_total'
+            )
+
             I_ff = sanitize_log_data(maps[ff_key])
+            I_syn = sanitize_log_data(maps[syn_key])
+            I_continuum = I_syn + I_ff
 
             extent = compute_map_extent(maps)
 
@@ -751,8 +788,8 @@ class BowShock:
             x_star = 0.0
             y_star = 0.0
 
-            data_list = [I_Halpha, I_OIII, I_ff]
-            keys = ['Halpha', 'OIII', 'ff']
+            data_list = [I_Halpha, I_OIII, I_continuum]
+            keys = ['Halpha', 'OIII', 'continuum']
 
             for i, (key, I_data) in enumerate(zip(keys, data_list)):
 
@@ -794,7 +831,8 @@ class BowShock:
                 maps,
                 I_Halpha,
                 I_OIII,
-                I_ff
+                I_ff,
+                I_syn
             )
 
         except Exception as e:
@@ -822,6 +860,8 @@ class BowShock:
         self.Vstar = self.sliders['Vstar'].val * 1e5 # km/s -> cm/s
         self.n_ism = self.sliders['n_ism'].val
         self.T_ism = self.sliders['T_ism'].val
+        self.f_NTe = self.sliders['f_NTe'].val
+        self.f_B = self.sliders['f_B'].val
         self.r0_str = self.sliders['r0_str'].val
         self.inclination = self.sliders['inclination'].val
         
@@ -876,6 +916,8 @@ class BowShock:
         self.Vstar = 128.5 * 1e5
         self.n_ism = 0.2
         self.T_ism = 8000.0
+        self.f_NTe = 0.1,
+        self.f_B = 0.1,
         self.r0_str = 1.6
         self.inclination = 75.0
         
