@@ -1,8 +1,8 @@
 # globals.py
 import numpy as np
 
-nx = 200
-ny = 200
-nz = 500
-zmax = 5. # In R0 units
+nx = 75
+ny = 75
+nz = 2000
+zmax = 10. # In R0 units
 max_theta = np.deg2rad(135.)
