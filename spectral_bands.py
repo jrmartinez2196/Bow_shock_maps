@@ -14,7 +14,7 @@ spec_bands = {
     },
     'IR': {
         'frequency': 3e12,
-        'description': '3 THz - Mid infrared'
+        'description': '100 mum - Mid infrared'
     },
     'optical_R': {
         'frequency': 4.3e14,
