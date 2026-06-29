@@ -197,7 +197,7 @@ def lambda_T(T):
 
     mask_low = T < 1e4
     if np.any(mask_low):
-        result[mask_low] = 7e-27 * 1e4
+        result[mask_low] = 4e-29 * T[mask_low]**(0.8) # Muller 2018
     
     mask1 = (T >= 1e4) & (T <= 1e5)
     if np.any(mask1):
@@ -399,7 +399,7 @@ def vadv(thr, rr, R0_phys, v_t, v_perp, comp, t_cool):
 # Post-shock conditions
 # ============================================================
 
-def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=1e4, **kwargs):
+def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     """
     Calculate post-shock conditions for forward or reverse shock.
     

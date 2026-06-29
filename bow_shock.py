@@ -110,7 +110,7 @@ class BowShock:
         self.update_lam_from_T_ism()
         
         # Recombination zone temperature
-        self.T_IL = self.params.get('T_IL', 1e4)
+        self.T_IL = self.params.get('T_IL', 8e3)
         
         # Wind regime
         self.wind_regime = self.params.get('wind_regime', 'hot')
