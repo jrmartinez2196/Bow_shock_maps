@@ -36,9 +36,13 @@ def emissivity_OIII(n, T, ion_H = 1., ion_O=1.):
     
     nu = 5.997e14
     A21 = 0.02     # s^-1
+    A_5007 = 0.0209    # s^-1, 1D2 -> 3P2
+    A_4959 = 0.0068    # s^-1, 1D2 -> 3P1
+    A_tot  = A_5007 + A_4959
+
     gamma_12 = 2.29
     g_12 = 9
-    E12_k = 32900  # K
+    E12_k = 28737. # K - Meyer 2016
     
     # Collision rate
     q12 = 8.629e-6 * gamma_12 * np.exp(-E12_k / T_arr) / (np.sqrt(T_arr) * g_12)
@@ -47,10 +51,11 @@ def emissivity_OIII(n, T, ion_H = 1., ion_O=1.):
     n_e = ion_H * n_arr
     n_OIII = 4.57e-4 * n_arr * ion_O
     
-    n2 = n_OIII * n_e * q12 / A21
+    n2 = n_OIII * n_e * q12 / A_tot
     
     # Emissivity
-    j = (h * nu / (4 * np.pi)) * n2 * A21 / sr_per_arcsec2
+    j = (h * nu / (4 * np.pi)) * n2 * A_5007 / sr_per_arcsec2
+    #j = 3.23e-21 * np.exp(-28737/T) * n_e**2./(4.*np.pi*np.sqrt(T)) / sr_per_arcsec2
     
     return j
 
