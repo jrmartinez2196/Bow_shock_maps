@@ -19,6 +19,7 @@ from radiation import emissivity_Halpha, emissivity_OIII, nu_emissivity_freefree
 from radiation import precompute_gaunt_for_temperatures
 
 from matplotlib.colors import LogNorm
+import warnings
 
 ion_table = IonizationTable("ionization_table.dat")
 
@@ -106,7 +107,7 @@ def get_r_theta_from_christie(lam, n_theta=800):
     return theta_vals, r_vals, r_func
 
 
-def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=1e4, **kwargs):
+def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=8e3, **kwargs):
     """
     Precompute all shock properties on a regular grid for fast interpolation.
     Uses RegularGridInterpolator for much faster evaluation than interp1d.
@@ -188,7 +189,7 @@ def make_projection_maps(xmin, xmax, ymin, ymax, nx, ny,
                               fwhm_x = 3.0, fwhm_y = 3.0, f_ny=0.5,
                               lmb=0.0, R0_phys=1.0,
                               rs_radiative=None, fs_radiative=None,
-                              T_IL=1e4,
+                              T_IL=8e3,
                               Vstar=None, n_ism=None, Mdot=None, Vw=None,
                               wind_regime='hot', wind_T_fixed=None,
                               f_NTp=0.1, f_NTe=0.01,
@@ -258,6 +259,34 @@ def make_projection_maps(xmin, xmax, ymin, ymax, nx, ny,
     print(f'Beam size: {fwhm_x:.1f} arcsec')
 
     lam = 10**lmb
+
+    #==========================
+    # Resolution check
+    # =========================
+    if convolve:
+        dx_phys = (xmax - xmin) / (nx - 1)
+        dy_phys = (ymax - ymin) / (ny - 1)
+
+        dx_arcsec = arcsecond(dx_phys, distance)
+        dy_arcsec = arcsecond(dy_phys, distance)
+
+        if dx_arcsec > f_ny * fwhm_x:
+            nx_new = int(nx * dx_arcsec / (f_ny * fwhm_x)) + 1
+            warnings.warn(
+                f'Map resolution in x is too low for beam size '
+                f'(dx = {dx_arcsec:.2f} arcsec, required dx <= {f_ny*fwhm_x:.2f} arcsec). '
+                f'Increasing nx: {nx} -> {nx_new}.'
+            )
+            nx = nx_new
+
+        if dy_arcsec > f_ny * fwhm_y:
+            ny_new = int(ny * dy_arcsec / (f_ny * fwhm_y)) + 1
+            warnings.warn(
+                f'Map resolution in y is too low for beam size '
+                f'(dy = {dy_arcsec:.2f} arcsec, required dy <= {f_ny*fwhm_y:.2f} arcsec). '
+                f'Increasing ny: {ny} -> {ny_new}.'
+            )
+            ny = ny_new
     
     theta_precomp = np.linspace(1e-6, theta_max, 300)
     rr_precomp = R_RS_func(theta_precomp) # already normalized
@@ -628,11 +657,6 @@ def convolution(result, x_vals_arcsec, y_vals_arcsec,
     # Convert FWHM to sigma
     sigma_x = fwhm_to_sigma(fwhm_x)
     sigma_y = fwhm_to_sigma(fwhm_y)
-
-    if (dx > f_ny * fwhm_x):
-        raise ValueError(f'Map resolution is too low! dx = {dx:.1f} arcsec, allowed dx <= {f_ny*fwhm_x:.1f} arcsec')
-    elif (dy > f_ny * fwhm_y):
-        raise ValueError(f'Map resolution is too low! dy = {dy:.1f} arcsec, allowed dy <= {f_ny*fwhm_y:.1f} arcsec')
 
     # Convert beam size to pixels
     sigma_x_pix = sigma_x / dx
