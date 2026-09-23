@@ -214,10 +214,6 @@ def lambda_T(T):
         if np.any(mask3):
             result[mask3] = 3e-27 * np.sqrt(T[mask3])
     
-    invalid = ~(mask_low | mask1 | mask2 | mask_high)
-    if np.any(invalid):
-        result[invalid] = 1e-22
-    
     return result
 
 
@@ -310,7 +306,6 @@ def pre_shock_wind(Mdot, Vw, r_phys, wind_regime='hot', wind_T_fixed=None):
         T_pre = np.full_like(r_phys, 1e4, dtype=float)
     elif wind_regime == 'hot':
         T_pre = 1e5 * (Vw_kms / 2000.0)**2
-        #T_pre = np.clip(T_pre, 3e4, 2e6)
     elif wind_regime == 'fixed':
         if wind_T_fixed is None:
             raise ValueError("wind_T_fixed must be provided for 'fixed' regime")
@@ -325,74 +320,60 @@ def pre_shock_wind(Mdot, Vw, r_phys, wind_regime='hot', wind_T_fixed=None):
     return n_pre, T_pre, P_pre, cs
 
 
-def vadv(thr, rr, R0_phys, v_t, v_perp, comp, t_cool):
+def vadv(thr, rr, R0_phys, v_perp, comp, t_cool, v_pre, P_adi, rho_adi0):
     """
-    Define a minimum advection velocity to avoid unphysically slow
-    advection near the apex.
+    Advection velocity along the bow shock for an adiabatic shock.
+    We calculate the advection velocity from energy conservation using Bernoulli's equation
+    and neglecting the pre-shock thermal pressure
 
-    The method finds the angle theta_L at which the surface distance
-    traveled, s(theta_L), equals the cooling length,
+    0.5*v_pre**2 = 0.5*v_adv**2 + (gamma_ad/(gamma_ad-1)) * P_adi/rho_adi
 
-        l_cool = (v_perp / comp) * t_cool
-
-    and adopts the tangential velocity at that angle as the floor:
-
-        v_adv_min = v_t(theta_L)
-
-    The advection velocity is then
-
-        v_adv = max(v_t, v_adv_min)
+    We also set a minimum v_adv for the region near the apex,
+    where the cooling length is shorter than
+    the length traveled by the fluid
 
     Parameters
     ----------
-    thr : array
-        Angles from the apex [rad].
-    rr : array
-        Normalized radial coordinate r/R0.
-    R0_phys : float
-        Physical standoff radius [cm].
-    v_t : array
-        Tangential velocity [cm/s].
-    v_perp : array
-        Pre-shock perpendicular velocity [cm/s].
-    comp : array
-        Compression factor.
-    t_cool : array
-        Cooling timescale [s].
+    thr, rr, R0_phys, v_perp, comp, t_cool : as before
+    v_pre : float
+        Pre-shock velocity [cm/s].
+    P_adi : array
+        Adiabatic post-shock pressure, rho_pre*v_pre*v_perp.
+    rho_adi0 : float
+        Adiabatic post-shock density at the apex.
 
     Returns
     -------
     v_adv : array
-        Advection velocity [cm/s], equal to max(v_t, v_adv_min).
+        Advection velocity [cm/s].
     """
-
     R_phys = rr * R0_phys
 
     # Cooling length
     l_cool = (v_perp / comp) * t_cool
 
-    # Length from the apex along the bow shock
+    # Distance traveled along the bow shock from the apex
     dL = np.zeros_like(thr)
-
     for i in range(1, len(thr)):
         dtheta = thr[i] - thr[i-1]
-
-        dL[i] = np.sqrt( R_phys[i]**2 + R_phys[i-1]**2 - 2.0*R_phys[i]*R_phys[i-1]*np.cos(dtheta) )
-
+        dL[i] = np.sqrt(R_phys[i]**2 + R_phys[i-1]**2
+                - 2.0*R_phys[i]*R_phys[i-1]*np.cos(dtheta))
     s = np.cumsum(dL)
 
-    # We seek where f = 0
-    f = s - l_cool
+    # Density from the polytropic relation
+    rho_adi = rho_adi0 * (P_adi / P_adi[0])**(1.0 / gamma_ad)
 
-    idx = np.where(f >= 0)[0]
+    cte_ad = gamma_ad / (gamma_ad - 1.0)
+    v_adv = np.sqrt(v_pre**2 - 2.0 * cte_ad * P_adi / rho_adi)
 
-    if len(idx) == 0:
-        v_min = v_t[-1]
-    else:
-        iL = idx[0]
-        v_min = v_t[iL]
+    idx_cool = np.where(s >= l_cool)[0]
 
-    return np.maximum(v_t, v_min)
+    if idx_cool.size > 0:
+        i_cool = idx_cool[0]
+        # We set a minimum value v_adv(min) = v_adv(s = l_cool) near the apex
+        v_adv[:i_cool] = v_adv[i_cool]
+
+    return v_adv
 
 
 # ============================================================
@@ -404,7 +385,7 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     Calculate post-shock conditions for forward or reverse shock.
     
     When radiative: hot layer + cold recombination layer between hot layer and CD.
-    When adiabatic: only hot layer (cold layer properties = hot layer properties, thickness=0)
+    When adiabatic: only hot layer
 
     We employ Rankine-Hugoniot conditions if the shock is radiative
     And polytropic relation + specific enthalpy conservation if the shock is adiabatic
@@ -509,12 +490,12 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
 
     # Adiabatic conditions
     P_adi = rho_pre * v_pre * v_perp
-    rho_adi[0] = gamma_ad/(gamma_ad+1.) * 2. * P_adi[0] / v_pre**2.
+    rho_adi[0] = gamma_ad/(gamma_ad-1.) * 2. * P_adi[0] / v_pre**2.
     
     # Cooling and advection times
     t_cool = cooling_time(n_RH, T_RH)
     v_t = vtan(thr, rr, lam, shock, kwargs.get('Vw'), kwargs.get('Vstar'))
-    v_adv = vadv(thr, rr, R0_phys, v_t, v_perp, comp, t_cool)
+    v_adv = vadv(thr, rr, R0_phys, v_perp, comp, t_cool, v_pre, P_adi, rho_adi[0])
     t_adv = R_phys/v_adv
     
     # Radiative regime if cooling time < advection time
@@ -572,9 +553,10 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
             P_post[i] = P_RH[i]
             cs_post[i] = np.sqrt(gamma_ad*P_post[i]/rho_post[i])
 
-            if (v_adv[i] >= cs_post[i]):
-                supersonic = True
-                v_perp_crit = v_perp[i]
+            if not supersonic:
+                if (v_adv[i] >= cs_post[i]):
+                    supersonic = True
+                    v_perp_crit = v_perp[i]
 
             n_post[i] = n_RH[i]
             T_post[i] = T_RH[i]
@@ -585,7 +567,7 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
             
             # Hot layer thickness: cooling layer (post-shock)
             H_hot[i] = (v_perp[i] / comp[i]) * t_cool[i]
-            H_hot[i] = max(H_hot[i], 0.0)
+            #H_hot[i] = max(H_hot[i], 0.0)
             
             # Cold layer thickness from mass conservation
             rho_cold = n_rec[i] * mu_sh * mp
@@ -593,7 +575,7 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
             
             if denominator > 0 and i > 0:
                 H_cold[i] = dot_M[i] / denominator - H_hot[i] * (rho_RH[i] / rho_cold)
-            H_cold[i] = max(H_cold[i], 0.0)
+            #H_cold[i] = max(H_cold[i], 0.0)
             
         else:
             # Adiabatic: only hot layer, cold layer = hot layer (no recombination)
