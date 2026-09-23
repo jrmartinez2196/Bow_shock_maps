@@ -356,13 +356,14 @@ class BowShock:
         R_str = self.r0_str * R0_corrected           # Stromgren sphere radius
         inclination_rad = np.deg2rad(90 - self.inclination)
         convolve=self.convolve
-        print(f"Projected stagnation point distance = {R0_proj:.1f} ''")
+        #print(f"Projected stagnation point distance = {R0_proj:.1f} ''")
+        print(f"Projected stagnation point distance = {R0_proj/np.cos(np.deg2rad(self.inclination)):.1f} ''")
 
         sini = np.sin(np.deg2rad(self.inclination))
 
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-            xmin = -(3. + 2.*sini**2)*R0_corrected, xmax = (7. + 2.*sini**2)*R0_corrected,
-            ymin = -(5. + 2.*sini**2)*R0_corrected, ymax = (5. + 2.*sini**2)*R0_corrected,
+            xmin = -(2. + 2.*sini**2)*R0_corrected, xmax = (6. + 2.*sini**2)*R0_corrected,
+            ymin = -(4. + 2.*sini**2)*R0_corrected, ymax = (4. + 2.*sini**2)*R0_corrected,
             nx = self.nx, ny = self.ny,
             theta_max = max_theta,
             R_RS_func = self.R_RS_func,

@@ -344,7 +344,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
                                lmb=0.0, R0_phys=1.0,
                                R_stromgren=3.086e17,
                                rs_props=None, fs_props=None,
-                               theta_bounds=(1e-6, np.deg2rad(135.)),
+                               theta_bounds=(1e-6, np.deg2rad(120.)),
                                f_NTp=0.1, f_NTe=0.01,
                                p_inj=2.5,
                                f_B=0.1,
@@ -516,7 +516,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
         # RS - Hot post shock layer
         # ==========================================================
 
-        inside_hot_rs = ( (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :]) )
+        inside_hot_rs = (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :]) & (theta[i, :] <= theta_bounds[1])
 
         ion_H = np.ones_like(r_i)   # Ionization fractions; initialize assuming full ionization as inside the Stromgren sphere
         ion_O = np.ones_like(r_i)
@@ -544,7 +544,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
 
         if np.any(H_RS_cold[i, :] > 0):
 
-            inside_cold_rs = ( (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0) )
+            inside_cold_rs = (r_i >= R_RS_i + H_RS_hot[i, :]) & (r_i <= CD_pos_i) & (H_RS_cold[i, :] > 0) & (theta[i, :] <= theta_bounds[1])
 
             ion_H = np.ones_like(r_i)
             ion_O = np.ones_like(r_i)
@@ -564,7 +564,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
 
         if np.any(H_FS_cold[i, :] > 0):
 
-            inside_cold_fs = ( (r_i >= CD_pos_i) & (r_i <= CD_pos_i + H_FS_cold[i, :]) & (H_FS_cold[i, :] > 0) )
+            inside_cold_fs = (r_i >= CD_pos_i) & (r_i <= CD_pos_i + H_FS_cold[i, :]) & (H_FS_cold[i, :] > 0) & (theta[i, :] <= theta_bounds[1])
 
             ion_H = np.ones_like(r_i)
             ion_O = np.ones_like(r_i)
@@ -586,7 +586,7 @@ def los_projection_vectorized(x, y, R_RS_func, inclination=0.0,
 
         hot_start = CD_pos_i + H_FS_cold[i, :]
 
-        inside_hot_fs = ( (r_i >= hot_start) & (r_i <= FS_pos_i) )
+        inside_hot_fs = (r_i >= hot_start) & (r_i <= FS_pos_i) & (theta[i, :] <= theta_bounds[1])
 
         ion_H = np.ones_like(r_i)
         ion_O = np.ones_like(r_i)
