@@ -3,6 +3,7 @@
 import numpy as np
 from scipy.interpolate import interp1d
 
+
 class IonizationTable:
     """
     Interpolates ionization fractions from ionization_table.dat
@@ -14,30 +15,39 @@ class IonizationTable:
 
         data = np.loadtxt(filename)
 
-        logT = data[:,0]
+        logT = data[:, 0]
 
         self.T = 10**logT
 
-        self.HII = data[:,1]
-        self.OIII = data[:,2]
+        self.HII = data[:, 1]
+        self.OIII = data[:, 2]
 
         # Interpolators
         self.HII_interp = interp1d(
-            self.T,
-            self.HII,
-            bounds_error=False,
-            fill_value=(self.HII[0], self.HII[-1])
+            self.T, self.HII, bounds_error=False, fill_value=(self.HII[0], self.HII[-1])
         )
 
         self.OIII_interp = interp1d(
             self.T,
             self.OIII,
             bounds_error=False,
-            fill_value=(self.OIII[0], self.OIII[-1])
+            fill_value=(self.OIII[0], self.OIII[-1]),
         )
 
     def fractions(self, T):
+        """Interpolate HII and [OIII] ionization fractions at temperature T.
 
+        Parameters
+        ----------
+        T : float or array
+            Temperature [K].
+
+        Returns
+        -------
+        (ion_H, ion_O) : tuple of float or array
+            HII and OIII ionization fractions, clipped to the tabulated
+            range (constant extrapolation outside it).
+        """
         ion_H = self.HII_interp(T)
         ion_O = self.OIII_interp(T)
 

@@ -1,14 +1,14 @@
 # module: plot_maps.py
 import matplotlib.pyplot as plt
+import numpy as np
 from matplotlib.colors import LogNorm
 from matplotlib.transforms import Affine2D
-import numpy as np
 
-from maps import arcsecond
+from bowshockmaps.maps import arcsecond
 
 
 def sanitize_log_data(data):
-    '''
+    """
     Sanitize data before plotting with LogNorm.
 
     Replaces non-finite values (NaN or inf) with zeros and clips the
@@ -24,7 +24,7 @@ def sanitize_log_data(data):
     --------
     ndarray
         Sanitized array with only finite positive values.
-    '''
+    """
 
     data = np.asarray(data)
     data = np.where(np.isfinite(data), data, 0.0)
@@ -33,7 +33,7 @@ def sanitize_log_data(data):
 
 
 def get_norm(data):
-    '''
+    """
     Logarithmic normalization for emission maps.
 
     The normalization range is defined between
@@ -47,7 +47,7 @@ def get_norm(data):
     Returns:
     --------
     Logarithmic normalization object for plotting.
-    '''
+    """
 
     data = data[np.isfinite(data) & (data > 0)]
 
@@ -56,13 +56,13 @@ def get_norm(data):
 
     vmax = np.max(data)
 
-    vmin = vmax / 100.
+    vmin = vmax / 100.0
 
     return LogNorm(vmin=vmin, vmax=1.1 * vmax)
 
 
 def compute_R0_position(inclination, distance, R0_corrected):
-    '''
+    """
     Compute the projected position of the apex on the sky.
 
     Calculated from stellar position
@@ -82,21 +82,18 @@ def compute_R0_position(inclination, distance, R0_corrected):
     --------
     dict
         Dictionary containing the stellar coordinates
-    '''
+    """
     inc = np.deg2rad(inclination)
 
-    x_R0 = -arcsecond(R0_corrected*np.cos(inc),distance)
+    x_R0 = -arcsecond(R0_corrected * np.cos(inc), distance)
 
     y_R0 = 0.0
 
-    return {
-        'x_R0': x_R0,
-        'y_R0': y_R0
-    }
+    return {"x_R0": x_R0, "y_R0": y_R0}
 
 
 def compute_plot_limits(extent, PA):
-    '''
+    """
     Given an image (xmax-xmin)*(ymax-ymin)
     Calculates the new limits according to PA
 
@@ -108,35 +105,25 @@ def compute_plot_limits(extent, PA):
     Returns:
     --------
     dict
-    '''
+    """
 
     xmin, xmax, ymin, ymax = extent
 
-    PA_rot = np.deg2rad(PA - 90.)
+    PA_rot = np.deg2rad(PA - 90.0)
 
-    corners = np.array([
-        [xmin, ymin],
-        [xmin, ymax],
-        [xmax, ymin],
-        [xmax, ymax]
-    ])
+    corners = np.array([[xmin, ymin], [xmin, ymax], [xmax, ymin], [xmax, ymax]])
 
-    x_rot = (
-        corners[:,0]*np.cos(PA_rot)
-        - corners[:,1]*np.sin(PA_rot)
-    )
+    x_rot = corners[:, 0] * np.cos(PA_rot) - corners[:, 1] * np.sin(PA_rot)
 
-    y_rot = (
-        corners[:,0]*np.sin(PA_rot)
-        + corners[:,1]*np.cos(PA_rot)
-    )
+    y_rot = corners[:, 0] * np.sin(PA_rot) + corners[:, 1] * np.cos(PA_rot)
 
     return {
-        'xmin': np.min(x_rot),
-        'xmax': np.max(x_rot),
-        'ymin': np.min(y_rot),
-        'ymax': np.max(y_rot)
+        "xmin": np.min(x_rot),
+        "xmax": np.max(x_rot),
+        "ymin": np.min(y_rot),
+        "ymax": np.max(y_rot),
     }
+
 
 def compute_map_extent(maps):
     """
@@ -155,12 +142,7 @@ def compute_map_extent(maps):
         [xmin, xmax, ymin, ymax].
     """
 
-    return [
-        np.min(maps['x']),
-        np.max(maps['x']),
-        np.min(maps['y']),
-        np.max(maps['y'])
-    ]
+    return [np.min(maps["x"]), np.max(maps["x"]), np.min(maps["y"]), np.max(maps["y"])]
 
 
 def update_map_image(ax, key, I_data, extent, images, colorbars, band_name, PA):
@@ -195,45 +177,40 @@ def update_map_image(ax, key, I_data, extent, images, colorbars, band_name, PA):
 
     norm = get_norm(I_data)
 
-    cmap = plt.colormaps['inferno'].copy()
-    cmap.set_under('white')
+    cmap = plt.colormaps["inferno"].copy()
+    cmap.set_under("white")
 
     # PA rotation
-    transform = (Affine2D().rotate_deg_around(0.0, 0.0, PA - 90.)+ ax.transData)
+    transform = Affine2D().rotate_deg_around(0.0, 0.0, PA - 90.0) + ax.transData
 
     if img is None:
 
         img_obj = ax.imshow(
-                            I_data,
-                            origin='lower',
-                            extent=extent,
-                            cmap=cmap,
-                            norm=norm,
-                            transform=transform
-                        )
+            I_data,
+            origin="lower",
+            extent=extent,
+            cmap=cmap,
+            norm=norm,
+            transform=transform,
+        )
 
         images[key] = img_obj
 
-        if (key == 'ff' or key == ' syn' or key == 'continuum') and (band_name == 'radio' or band_name == 'low_radio'):
+        if (key in ("ff", "syn", "continuum")) and (
+            band_name == "radio" or band_name == "low_radio"
+        ):
 
-            cbar_label = r'Surface brightness [mJy beam$^{-1}$]'
+            cbar_label = r"Surface brightness [mJy beam$^{-1}$]"
 
-        elif key == 'Halpha':
+        elif key == "Halpha":
 
-            cbar_label = r'Surface brightness [R]'
+            cbar_label = r"Surface brightness [R]"
 
         else:
 
-            cbar_label = (
-                r'Surface brightness '
-                r'[erg s$^{-1}$ cm$^{-2}$ arcsec$^{-2}$]'
-            )
+            cbar_label = r"Surface brightness " r"[erg s$^{-1}$ cm$^{-2}$ arcsec$^{-2}$]"
 
-        colorbars[key] = plt.colorbar(
-            img_obj,
-            ax=ax,
-            label=cbar_label
-        )
+        colorbars[key] = plt.colorbar(img_obj, ax=ax, label=cbar_label)
 
     else:
 
@@ -261,33 +238,22 @@ def update_star_marker(ax, x_star, y_star, key, star_markers):
 
     if star_markers[key] is None:
 
-        star, = ax.plot(
-            x_star,
-            y_star,
-            marker='*',
-            color='black',
-            markersize=10,
-            zorder=5
-        )
+        (star,) = ax.plot(x_star, y_star, marker="*", color="black", markersize=10, zorder=5)
 
         star_markers[key] = star
 
     else:
 
-        star_markers[key].set_data(
-            [x_star],
-            [y_star]
-        )
+        star_markers[key].set_data([x_star], [y_star])
 
 
-def update_map_arrow(ax, key, x_star, y_star, x0, y0,
-                    R0_corrected, distance, arrows, PA):
+def update_map_arrow(ax, key, x_star, y_star, x0, y0, R0_corrected, distance, arrows, PA):
     """
     Create or update the arrow from the star to the apex.
 
     Parameters
     ----------
-    ax : 
+    ax :
         Axis where the arrow is displayed.
     key : str
         Identifier of the emission map.
@@ -309,24 +275,20 @@ def update_map_arrow(ax, key, x_star, y_star, x0, y0,
         arrows[key].remove()
 
     # PA rotation
-    transform = (
-                Affine2D()
-                .rotate_deg_around(0.0, 0.0, PA - 90.)
-                + ax.transData
-            )
+    transform = Affine2D().rotate_deg_around(0.0, 0.0, PA - 90.0) + ax.transData
 
     arr = ax.arrow(
-                x_star,
-                y_star,
-                x0*1.5,
-                y0*1.5,
-                color='grey',
-                width=0.3,
-                head_width=0.15 * arcsecond(R0_corrected, distance),
-                length_includes_head=True,
-                zorder=5,
-                transform=transform
-            )
+        x_star,
+        y_star,
+        x0 * 1.5,
+        y0 * 1.5,
+        color="grey",
+        width=0.3,
+        head_width=0.15 * arcsecond(R0_corrected, distance),
+        length_includes_head=True,
+        zorder=5,
+        transform=transform,
+    )
 
     arrows[key] = arr
 
@@ -338,7 +300,7 @@ def update_map_contours(ax, key, maps, I_data, contours, PA):
 
     Parameters
     ----------
-    ax : 
+    ax :
         Axis where contours are displayed.
     key : str
         Identifier of the emission map.
@@ -356,19 +318,15 @@ def update_map_contours(ax, key, maps, I_data, contours, PA):
         contours[key].remove()
 
     # PA rotation
-    transform = (
-                Affine2D()
-                .rotate_deg_around(0.0, 0.0, PA - 90.)
-                + ax.transData
-            )
+    transform = Affine2D().rotate_deg_around(0.0, 0.0, PA - 90.0) + ax.transData
 
     cont = ax.contour(
-        maps['x'],
-        maps['y'],
+        maps["x"],
+        maps["y"],
         I_data,
-        levels=np.max(I_data)*np.array([0.1,0.25,0.5]),
-        colors='lime',
-        transform=transform
+        levels=np.max(I_data) * np.array([0.1, 0.25, 0.5]),
+        colors="lime",
+        transform=transform,
     )
 
     contours[key] = cont
@@ -391,14 +349,29 @@ def update_map_limits(map_axes, xmin, xmax, ymin, ymax):
 
         ax.set_xlim(xmin, xmax)
         ax.set_ylim(ymin, ymax)
-        ax.set_aspect('equal')
+        ax.set_aspect("equal")
 
 
-def update_map_panel(ax, key, I_data, extent, maps,
-                    x_star, y_star, x0, y0,
-                    R0_corrected, distance, band_name, PA,
-                    images, colorbars, contours,
-                    star_markers, arrows):
+def update_map_panel(
+    ax,
+    key,
+    I_data,
+    extent,
+    maps,
+    x_star,
+    y_star,
+    x0,
+    y0,
+    R0_corrected,
+    distance,
+    band_name,
+    PA,
+    images,
+    colorbars,
+    contours,
+    star_markers,
+    arrows,
+):
     """
     Update all visual elements of the emission maps:
     image, contours, stellar marker, and direction arrow.

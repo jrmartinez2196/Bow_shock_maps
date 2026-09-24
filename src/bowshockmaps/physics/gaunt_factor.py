@@ -1,9 +1,19 @@
-import numpy as np
 from pathlib import Path
-from constants import Ry, kB, h
+
+import numpy as np
+
+from bowshockmaps.constants import Ry, h, kB
+from bowshockmaps.paths import GAUNT_FACTOR_FILE
+
 
 class GauntFactor:
-    def __init__(self, data_file='gauntff.dat'):
+    """Tabulated free-free Gaunt factor with bilinear interpolation.
+
+    Loads the van Hoof et al. free-free Gaunt factor table and
+    interpolates it in (log gamma^2, log u) space.
+    """
+
+    def __init__(self, data_file=GAUNT_FACTOR_FILE):
         self.nu_mu = 146
         self.nu_mga = 81
         self.log_gamma2_start = -6.0
@@ -14,23 +24,36 @@ class GauntFactor:
     def _load_table(self, data_file):
         file_path = Path(data_file)
         if not file_path.exists():
-            file_path = Path(__file__).parent / data_file
-
-        if not file_path.exists():
             raise FileNotFoundError(f"Gaunt factor data file not found: {data_file}")
 
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             lines = f.readlines()
 
         data_lines = lines[16:]
 
         gff = np.zeros((self.nu_mu, self.nu_mga))
         for i in range(self.nu_mu):
-            gff[i, :] = np.fromstring(data_lines[i], sep=' ')[:self.nu_mga]
+            gff[i, :] = np.fromstring(data_lines[i], sep=" ")[: self.nu_mga]
 
         return gff
 
     def gaunt_ff_calc(self, nu_ff, T, Z):
+        """Interpolate the free-free Gaunt factor at given frequency/temperature.
+
+        Parameters
+        ----------
+        nu_ff : float or array
+            Photon frequency [Hz].
+        T : float or array
+            Electron temperature [K]. Broadcast against ``nu_ff``.
+        Z : float
+            Ion charge.
+
+        Returns
+        -------
+        float or array
+            Interpolated Gaunt factor (1.0 where ``T`` is non-finite or <= 0).
+        """
         nu_ff = np.asarray(nu_ff, dtype=float)
         T = np.asarray(T, dtype=float)
 
@@ -70,8 +93,8 @@ class GauntFactor:
         f10 = self.gff[jm, jg + 1]
         f01 = self.gff[jm + 1, jg]
 
-        fx = (f10 - f00)
-        fy = (f01 - f00)
+        fx = f10 - f00
+        fy = f01 - f00
 
         g_interp = f00 + fx * dg + fy * dm
 
@@ -83,7 +106,14 @@ class GauntFactor:
 # Global instance
 _gaunt_instance = None
 
-def gaunt_ff_calc(nu_ff, T_l, Zq_l, data_file='gauntff.dat'):
+
+def gaunt_ff_calc(nu_ff, T_l, Zq_l, data_file=GAUNT_FACTOR_FILE):
+    """Module-level convenience wrapper around a lazily-created `GauntFactor`.
+
+    Reuses a single cached `GauntFactor` instance (and its loaded data
+    table) across calls instead of re-reading the table from disk
+    every time. See `GauntFactor.gaunt_ff_calc` for parameter details.
+    """
     global _gaunt_instance
     if _gaunt_instance is None:
         _gaunt_instance = GauntFactor(data_file)
