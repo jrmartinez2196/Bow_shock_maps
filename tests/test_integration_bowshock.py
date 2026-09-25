@@ -27,6 +27,24 @@ def test_bowshock_has_finite_projected_geometry(app):
     assert np.isfinite(app.get_R0_corrected())
 
 
+def test_beam_fwhm_priority_explicit_override_wins():
+    app = BowShock(
+        "RXJ0528+2838", convolve=False, telescope="VLA", telescope_config="B", beam_fwhm=2.5
+    )
+    assert app.get_beam_fwhm(fallback_fwhm=999.0) == 2.5
+
+
+def test_beam_fwhm_from_telescope_when_no_override():
+    app = BowShock("RXJ0528+2838", convolve=False, telescope="VLA", telescope_config="B")
+    fwhm = app.get_beam_fwhm(fallback_fwhm=999.0)
+    assert 0 < fwhm < 999.0
+
+
+def test_beam_fwhm_falls_back_when_no_telescope_or_override():
+    app = BowShock("RXJ0528+2838", convolve=False)
+    assert app.get_beam_fwhm(fallback_fwhm=42.0) == 42.0
+
+
 def test_compute_maps_includes_continuum_and_components():
     # Low resolution: the default resolution is realistic for a real
     # analysis but too heavy for a fast test run, so we shrink the grid

@@ -3,6 +3,7 @@
 import argparse
 import logging
 
+from bowshockmaps.instruments import TELESCOPES, list_telescopes
 from bowshockmaps.paths import SYSTEMS_DIR
 from bowshockmaps.spectral_bands import spec_bands
 from bowshockmaps.visualization.app import BowShock
@@ -21,6 +22,9 @@ Examples:
   bowshockmaps --source RXJ0528+2838
   bowshockmaps --source RXJ0528+2838 --params-dir ./params_file
   bowshockmaps --list-bands
+  bowshockmaps --list-telescopes
+  bowshockmaps --band radio --telescope VLA --telescope-config B
+  bowshockmaps --band radio --beam-fwhm 2.5
 
 Available frequencies:
   low_radio, radio, IR, optical_R, optical_V, optical_B, FUV, EUV, Xray_soft, Xray_hard
@@ -61,6 +65,34 @@ Available frequencies:
         help="Whether the emission map is convolved with a Gaussian beam instrument",
     )
     parser.add_argument(
+        "--list-telescopes",
+        action="store_true",
+        help="List the telescopes/array configurations available for --telescope",
+    )
+    parser.add_argument(
+        "--telescope",
+        type=str,
+        default=None,
+        choices=sorted(TELESCOPES) or None,
+        help=(
+            "Telescope used to set the convolution beam FWHM, diffraction-limited "
+            "at the current --band frequency (see --list-telescopes). Ignored if "
+            "--beam-fwhm is also given."
+        ),
+    )
+    parser.add_argument(
+        "--telescope-config",
+        type=str,
+        default=None,
+        help="Array configuration for --telescope (e.g. 'B' for the VLA); see --list-telescopes",
+    )
+    parser.add_argument(
+        "--beam-fwhm",
+        type=float,
+        default=None,
+        help="Beam FWHM [arcsec] to convolve with directly, overriding --telescope",
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -85,8 +117,21 @@ def main() -> None:
             print(f"  {band:12s} : {info['description']}")
         return
 
+    if args.list_telescopes:
+        print("Available telescopes for --telescope:")
+        for name, description in list_telescopes().items():
+            print(f"  {name:12s} : {description}")
+        return
+
     logger.info("Loading. Source: %s, params_dir: %s", args.source, args.params_dir)
-    app = BowShock(args.source, args.params_dir, convolve=args.convolve)
+    app = BowShock(
+        args.source,
+        args.params_dir,
+        convolve=args.convolve,
+        telescope=args.telescope,
+        telescope_config=args.telescope_config,
+        beam_fwhm=args.beam_fwhm,
+    )
 
     if args.band:
         app.set_continuum_band(args.band)

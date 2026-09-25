@@ -15,6 +15,7 @@ from scipy.interpolate import interp1d
 
 from bowshockmaps.config import max_theta, nx, ny, nz, zmax
 from bowshockmaps.constants import Msun_yr, kB, mp, mu
+from bowshockmaps.instruments import beam_fwhm_arcsec
 from bowshockmaps.io_utils import get_source_params, validate_params
 from bowshockmaps.maps import (
     arcsecond,
@@ -158,7 +159,15 @@ class BowShock:
         self.thermo_data = None
         self.map_data = None
 
-    def __init__(self, source_name="RXJ0528+2838", params_dir=None, convolve=True):
+    def __init__(
+        self,
+        source_name="RXJ0528+2838",
+        params_dir=None,
+        convolve=True,
+        telescope=None,
+        telescope_config=None,
+        beam_fwhm=None,
+    ):
         """
         Initialize bow shock model with parameters from file.
 
@@ -168,13 +177,56 @@ class BowShock:
             Name of the source (e.g., 'RXJ0528+2838')
         params_dir : str or Path
             Directory containing parameter files (converted to Path internally)
+        convolve : bool
+            Whether maps are convolved with a Gaussian instrumental beam.
+        telescope : str, optional
+            Name of a telescope in `bowshockmaps.instruments.TELESCOPES`
+            (e.g. "VLA"). When given, the beam FWHM used for convolution
+            is computed from this telescope's aperture/configuration and
+            the current continuum frequency (`self.nu_ff`), instead of
+            the fallback (projected stagnation-point distance).
+        telescope_config : str, optional
+            Array configuration name for interferometers with more than
+            one configuration (e.g. "B" for the VLA). Ignored for
+            single-dish telescopes.
+        beam_fwhm : float, optional
+            Beam FWHM [arcsec], given directly. Takes priority over
+            `telescope`/`telescope_config` when both are given -- use
+            this if you already know the beam size (e.g. from an actual
+            observation) rather than estimating it diffraction-limited.
         """
 
         self._load_parameters(source_name, params_dir)
         # Determines if the map is convolved with a Gaussian beam or not
         self.convolve = convolve
+        self.telescope = telescope
+        self.telescope_config = telescope_config
+        self.beam_fwhm = beam_fwhm
         self._initialize_model()
         self._initialize_plots()
+
+    def get_beam_fwhm(self, fallback_fwhm):
+        """Resolve the beam FWHM [arcsec] used for convolution.
+
+        Priority: an explicit `self.beam_fwhm` override, then a named
+        `self.telescope` (diffraction-limited estimate at `self.nu_ff`),
+        then `fallback_fwhm` (used when neither is set).
+        """
+        if self.beam_fwhm is not None:
+            return self.beam_fwhm
+
+        if self.telescope is not None:
+            fwhm = beam_fwhm_arcsec(self.telescope, self.nu_ff, self.telescope_config)
+            logger.info(
+                "Beam FWHM from %s%s at %.3g Hz: %.3f arcsec",
+                self.telescope,
+                f" ({self.telescope_config})" if self.telescope_config else "",
+                self.nu_ff,
+                fwhm,
+            )
+            return fwhm
+
+        return fallback_fwhm
 
     # ==========================================================
     # Bow shock geometry
@@ -392,6 +444,8 @@ class BowShock:
 
         sini = np.sin(np.deg2rad(self.inclination))
 
+        fwhm = self.get_beam_fwhm(R0_proj)
+
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
             xmin=-(2.0 + 2.0 * sini**2) * R0_corrected,
             xmax=(6.0 + 2.0 * sini**2) * R0_corrected,
@@ -405,8 +459,8 @@ class BowShock:
             PA=self.PA,
             zmax=self.zmax,
             nz=self.nz,
-            fwhm_x=R0_proj,
-            fwhm_y=R0_proj,
+            fwhm_x=fwhm,
+            fwhm_y=fwhm,
             f_ny=0.5,
             lmb=self.lmb,
             R0_phys=R0_corrected,

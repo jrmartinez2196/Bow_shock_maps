@@ -37,9 +37,26 @@ bowshockmaps --source BD+43 --band FUV
 # Disable Gaussian-beam convolution
 bowshockmaps --convolve false
 
+# Set the convolution beam from a real telescope + array configuration
+# (diffraction-limited estimate at the current --band frequency)
+bowshockmaps --band radio --telescope VLA --telescope-config B
+
+# List available telescopes/configurations
+bowshockmaps --list-telescopes
+
+# Give the beam FWHM directly instead (arcsec), e.g. from a real observation
+bowshockmaps --band radio --beam-fwhm 2.5
+
 # Verbose (debug-level) logging
 bowshockmaps --verbose
 ```
+
+Without `--telescope`/`--beam-fwhm`, the convolution beam falls back to
+a placeholder (the source's own projected size) -- pass one of the two
+for a physically meaningful beam. See `src/bowshockmaps/instruments.py`
+for the telescope database and the (diffraction-limited, order-of-
+magnitude) formula used; add entries there for telescopes not yet
+listed.
 
 Source parameter files live in `data/systems/` (one `.txt` file per
 source, Python-dict syntax). To add a new source, drop a new file
