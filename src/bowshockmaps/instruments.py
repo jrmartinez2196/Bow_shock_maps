@@ -1,20 +1,24 @@
 """Telescope beam-size lookup, used to drive the convolution step.
 
 Provides a simple diffraction-limited estimate of the beam FWHM for a
-named telescope (single-dish, via its aperture diameter; or
-interferometer, via its array configuration's maximum baseline) at a
-given observing frequency:
+named telescope: for a single dish, via the Airy-disk first-null angle
+(1.22 * lambda / D); for an interferometer, via the standard
+lambda / D_max rule of thumb for the synthesized-beam resolution at its
+array configuration's maximum baseline.
 
-    theta_FWHM ~ 1.22 * (c / freq) / D
+These are two genuinely different formulas, not the same one applied
+to two kinds of "D": the 1.22 factor is specific to the diffraction
+pattern of a filled circular aperture (the Airy disk) and does not
+apply to a sparse interferometer array, which has no such pattern.
 
-This is a standard, order-of-magnitude resolution estimate, not a full
-synthesized-beam calculation: for a real interferometric observation,
-the actual beam shape/size also depends on the uv-coverage, the
-source's declination, and the imaging weights used, none of which are
-modeled here. Use `beam_fwhm_arcsec` as a reasonable starting point; if
-you have a beam size from an actual observation or proposal tool,
-override it directly instead (see the --beam-fwhm CLI flag / the
-`beam_fwhm` argument to `BowShock`).
+Both are order-of-magnitude estimates, not full synthesized-beam
+calculations: for an interferometer, the actual beam shape/size also
+depends on the uv-coverage, the source's declination, and the imaging
+weights used (uniform weighting is close to lambda/D_max; natural
+weighting is typically ~1.2-1.5x wider). Use `beam_fwhm_arcsec` as a
+reasonable starting point; if you have a beam size from an actual
+observation or proposal tool, override it directly instead (see the
+--beam-fwhm CLI flag / the `beam_fwhm` argument to `BowShock`).
 """
 
 from dataclasses import dataclass, field
@@ -143,6 +147,7 @@ def beam_fwhm_arcsec(telescope_name, freq_hz, config=None):
 
     if telescope.kind == "dish":
         D = telescope.diameter_m
+        airy_factor = 1.22  # first null of the Airy pattern (filled circular aperture)
     else:
         configs = telescope.configs
         if config is None:
@@ -159,7 +164,12 @@ def beam_fwhm_arcsec(telescope_name, freq_hz, config=None):
                 f"Unknown config '{config}' for telescope '{telescope_name}'. "
                 f"Available: {sorted(configs)}"
             ) from None
+        # No Airy factor here: a sparse interferometer array doesn't
+        # produce the same circular-aperture diffraction pattern a
+        # single dish does. lambda/D_max is the standard rule-of-thumb
+        # resolution estimate for a synthesized beam.
+        airy_factor = 1.0
 
     wavelength_m = _C_M_S / freq_hz
-    theta_rad = 1.22 * wavelength_m / D
+    theta_rad = airy_factor * wavelength_m / D
     return np.degrees(theta_rad) * 3600.0
