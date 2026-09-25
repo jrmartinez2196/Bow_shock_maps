@@ -17,7 +17,7 @@ pip install -e .          # runtime dependencies only
 pip install -e ".[dev]"
 ```
 
-Requires Python >= 3.10.
+Requires Python >= 3.8.
 
 ## Usage
 

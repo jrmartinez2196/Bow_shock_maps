@@ -7,7 +7,7 @@ name = "bowshockmaps"
 version = "0.1.0"
 description = "Modeling and visualization of forbidden-line emission from wind-driven stellar bow shocks"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.8"
 license = { text = "MIT" }
 authors = [{ name = "Javier Martinez" }]
 dependencies = [
