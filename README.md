@@ -1,7 +1,6 @@
 # Bow Shock Maps
 
-Modeling and visualization of forbidden-line (and free-free/synchrotron
-continuum) emission from wind-driven stellar bow shocks. Computes 2D
+Modeling and visualization of emission from wind-driven stellar bow shocks. Computes 2D
 projected emission maps via line-of-sight integration through the
 shocked wind/ISM, with optional Gaussian-beam convolution to simulate
 an instrument's angular resolution.
@@ -38,7 +37,6 @@ bowshockmaps --source BD+43 --band FUV
 bowshockmaps --convolve false
 
 # Set the convolution beam from a real telescope + array configuration
-# (diffraction-limited estimate at the current --band frequency)
 bowshockmaps --band radio --telescope VLA --telescope-config B
 
 # List available telescopes/configurations
@@ -52,7 +50,7 @@ bowshockmaps --verbose
 ```
 
 Without `--telescope`/`--beam-fwhm`, the convolution beam falls back to
-a placeholder (the source's own projected size) -- pass one of the two
+a placeholder (the source's projected stagnation radius) -- pass one of the two
 for a physically meaningful beam. See `src/bowshockmaps/instruments.py`
 for the telescope database and the (diffraction-limited, order-of-
 magnitude) formula used; add entries there for telescopes not yet
@@ -75,18 +73,18 @@ src/bowshockmaps/
 ├── paths.py                    # filesystem locations (data dir, etc.)
 ├── spectral_bands.py           # named frequency bands for free-free emission
 ├── physics/
-│   ├── bow_shock_surface.py    # bow-shock geometry (Wilkin 1997, Christie+ 2016)
+│   ├── bow_shock_surface.py    # bow-shock geometry (Wilkin 1996, Christie+ 2016)
 │   ├── gaunt_factor.py         # tabulated free-free Gaunt factor
 │   ├── ionization.py           # ionization-fraction interpolation
 │   ├── normalization.py        # non-thermal particle normalization
 │   ├── radiation.py            # emissivities (Halpha, [OIII], free-free, sync)
-│   └── thermodynamics.py       # Rankine-Hugoniot jump conditions, cooling, advection
+│   └── thermodynamics.py       # Adiabtatic vs radiative shocks, Rankine-Hugoniot jump conditions, cooling, advection
 └── visualization/
     ├── app.py                  # BowShock: interactive Matplotlib application
     └── plot_maps.py            # plotting helper functions
 
 data/
-├── gauntff.dat                 # free-free Gaunt factor table
+├── gauntff.dat                 # free-free Gaunt factor table from van Hoof+ 2014
 ├── ionization_table.dat        # CIE ionization fractions (Gnat & Sternberg 2007)
 └── systems/                    # per-source parameter files
 
