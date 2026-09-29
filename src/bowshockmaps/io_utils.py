@@ -109,8 +109,8 @@ def validate_params(params):
     - Vw: float > 0
     - Vstar: float > 0
     - n_ism: float > 0
-    - inclination: float (0°-180°)
-    - PA : float (0°-360°)
+    - inclination: float (-90°-90°) -90° -> BS behind the star; 0° -> edge-on; 90° -> BS front of the star
+    - PA : float (0°-360°) Projeted angle measured north to east
 
     Optional parameters (can be set by sliders or defaults):
     - dist: float > 0 (default: 224.0 pc)
@@ -148,8 +148,8 @@ def validate_params(params):
         params["R_str"] = 0.1 * pc
         logger.info("'R_str' not found in file. Using default: %s cm", params["R_str"])
 
-    if not (0 <= params["inclination"] <= 180):
-        raise ValueError(f"inclination must be between 0 and 180, got {params['inclination']}")
+    if not (-90 <= params["inclination"] <= 90):
+        raise ValueError(f"inclination must be between -90 and 90, got {params['inclination']}")
     if not (0 <= params["PA"] < 360):
         raise ValueError(f"PA must be between 0 and 360, got {params['PA']}")
 
