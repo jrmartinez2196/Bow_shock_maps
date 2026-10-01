@@ -22,6 +22,7 @@ from bowshockmaps.physics.radiation import (
 )
 from bowshockmaps.physics.thermodynamics import (
     magnetic_field,
+    offset_boundary_along_normal,
     post_shock_conditions,
     vnorm_forward,
     vnorm_wind,
@@ -373,6 +374,39 @@ def make_projection_maps(
         lam=lam,
     )
 
+    # ==========================================================
+    # Layer-boundary curves (RS_hot_outer, CD, FS_cold_outer, FS),
+    # offset along the local shock normal instead of added directly
+    # to the radial coordinate R_RS(theta) at fixed theta -- the bow
+    # shock isn't spherically symmetric, so away from the apex those
+    # are not the same thing (see `offset_boundary_along_normal`).
+    # Built once here, on the theta_precomp grid, then reused for
+    # every pixel/LOS-step via interpolation, same as R_RS_func.
+    # ==========================================================
+    R_RS_precomp_phys = rr_precomp * R0_phys
+    H_RS_hot_precomp = rs_props["H_hot"](theta_precomp)
+    H_RS_cold_precomp = rs_props["H_cold"](theta_precomp)
+    H_FS_cold_precomp = fs_props["H_cold"](theta_precomp)
+    H_FS_hot_precomp = fs_props["H_hot"](theta_precomp)
+
+    def _boundary_func(H_cumulative):
+        th_new, r_new = offset_boundary_along_normal(
+            theta_precomp, rr_precomp, R_RS_precomp_phys, H_cumulative, lam
+        )
+        return interp1d(
+            th_new,
+            r_new,
+            bounds_error=False,
+            fill_value=(r_new[0], r_new[-1]),
+        )
+
+    RS_hot_outer_func = _boundary_func(H_RS_hot_precomp)
+    CD_func = _boundary_func(H_RS_hot_precomp + H_RS_cold_precomp)
+    FS_cold_outer_func = _boundary_func(H_RS_hot_precomp + H_RS_cold_precomp + H_FS_cold_precomp)
+    FS_outer_func = _boundary_func(
+        H_RS_hot_precomp + H_RS_cold_precomp + H_FS_cold_precomp + H_FS_hot_precomp
+    )
+
     # Generate 2D coordinate grid
     x_vals = np.linspace(xmin, xmax, nx)
     y_vals = np.linspace(ymin, ymax, ny)
@@ -395,6 +429,10 @@ def make_projection_maps(
         R_stromgren=R_stromgren,
         rs_props=rs_props,
         fs_props=fs_props,
+        RS_hot_outer_func=RS_hot_outer_func,
+        CD_func=CD_func,
+        FS_cold_outer_func=FS_cold_outer_func,
+        FS_outer_func=FS_outer_func,
         theta_bounds=(theta_precomp[0], theta_precomp[-1]),
         f_NTp=f_NTp,
         f_NTe=f_NTe,
@@ -429,6 +467,10 @@ def los_projection_vectorized(
     R_stromgren=3.086e17,
     rs_props=None,
     fs_props=None,
+    RS_hot_outer_func=None,
+    CD_func=None,
+    FS_cold_outer_func=None,
+    FS_outer_func=None,
     theta_bounds=(1e-6, np.deg2rad(120.0)),
     f_NTp=0.1,
     f_NTe=0.01,
@@ -467,6 +509,12 @@ def los_projection_vectorized(
         Stromgren radius [cm]
     rs_props, fs_props : dict
         Precomputed shock properties from precompute_shock_properties
+    RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func : callable
+        boundary(theta) -> physical radius [cm] for each layer boundary
+        (RS hot/cold interface, contact discontinuity, FS cold/hot
+        interface, forward shock), built by offsetting the RS curve
+        along its local normal (see `offset_boundary_along_normal`)
+        rather than added directly to R_RS(theta) at fixed theta.
     nu_ff : float
         Frequency for free-free emission [Hz]
 
@@ -519,7 +567,6 @@ def los_projection_vectorized(
     # =========================
     # RS PROPERTIES
 
-    H_RS_hot = rs_props["H_hot"](theta_flat).reshape(theta.shape)
     H_RS_cold = rs_props["H_cold"](theta_flat).reshape(theta.shape)
 
     n_post_RS = rs_props["n_post"](theta_flat).reshape(theta.shape)
@@ -533,7 +580,6 @@ def los_projection_vectorized(
     # FS PROPERTIES
 
     H_FS_cold = fs_props["H_cold"](theta_flat).reshape(theta.shape)
-    H_FS_hot = fs_props["H_hot"](theta_flat).reshape(theta.shape)
 
     n_post_FS = fs_props["n_post"](theta_flat).reshape(theta.shape)
     T_post_FS = fs_props["T_post"](theta_flat).reshape(theta.shape)
@@ -587,9 +633,31 @@ def los_projection_vectorized(
     logger.info(f"Apex magnetic field: B_FS = {B_FS_apex[0]*1e6:.1f} muG")
 
     # =========================
-    # CD and FS positions
-    CD_pos = R_RS + H_RS_hot + H_RS_cold
-    FS_pos = CD_pos + H_FS_cold + H_FS_hot
+    # Layer boundary positions.
+    #
+    # These are NOT simply R_RS + (cumulative thickness) at fixed
+    # theta: the bow shock isn't spherically symmetric, so a thickness
+    # measured along the local shock normal only maps onto a radial
+    # distance that way at the apex. RS_hot_outer_func/CD_func/
+    # FS_cold_outer_func/FS_outer_func already account for this (see
+    # offset_boundary_along_normal / make_projection_maps).
+    RS_hot_outer = RS_hot_outer_func(theta_flat).reshape(theta.shape)
+    CD_pos = CD_func(theta_flat).reshape(theta.shape)
+    FS_cold_outer = FS_cold_outer_func(theta_flat).reshape(theta.shape)
+    FS_pos = FS_outer_func(theta_flat).reshape(theta.shape)
+
+    # Each boundary is built from an independent offset-and-reparametrize
+    # pass (see offset_boundary_along_normal), so near-degenerate regions
+    # (e.g. theta ~ 0, where the local normal direction itself is
+    # ill-defined, or where a layer's thickness ~ 0 and two boundaries
+    # should nearly coincide) can leave tiny numerical crossings. The
+    # physical layers are strictly nested by construction (each boundary
+    # is always farther from the star than the previous one), so enforce
+    # that explicitly rather than let interpolation noise violate it.
+    RS_hot_outer = np.maximum(RS_hot_outer, R_RS)
+    CD_pos = np.maximum(CD_pos, RS_hot_outer)
+    FS_cold_outer = np.maximum(FS_cold_outer, CD_pos)
+    FS_pos = np.maximum(FS_pos, FS_cold_outer)
 
     # =========================
     # LOS INTEGRATION
@@ -601,16 +669,16 @@ def los_projection_vectorized(
         outside_stromgren = r_i > R_stromgren  # Partial ionization
 
         R_RS_i = R_RS[i, :]
+        RS_hot_outer_i = RS_hot_outer[i, :]
         CD_pos_i = CD_pos[i, :]
+        FS_cold_outer_i = FS_cold_outer[i, :]
         FS_pos_i = FS_pos[i, :]
 
         # ==========================================================
         # RS - Hot post shock layer
         # ==========================================================
 
-        inside_hot_rs = (
-            (r_i >= R_RS_i) & (r_i <= R_RS_i + H_RS_hot[i, :]) & (theta[i, :] <= theta_bounds[1])
-        )
+        inside_hot_rs = (r_i >= R_RS_i) & (r_i <= RS_hot_outer_i) & (theta[i, :] <= theta_bounds[1])
 
         ion_H = np.ones_like(
             r_i
@@ -656,7 +724,7 @@ def los_projection_vectorized(
         if np.any(H_RS_cold[i, :] > 0):
 
             inside_cold_rs = (
-                (r_i >= R_RS_i + H_RS_hot[i, :])
+                (r_i >= RS_hot_outer_i)
                 & (r_i <= CD_pos_i)
                 & (H_RS_cold[i, :] > 0)
                 & (theta[i, :] <= theta_bounds[1])
@@ -697,7 +765,7 @@ def los_projection_vectorized(
 
             inside_cold_fs = (
                 (r_i >= CD_pos_i)
-                & (r_i <= CD_pos_i + H_FS_cold[i, :])
+                & (r_i <= FS_cold_outer_i)
                 & (H_FS_cold[i, :] > 0)
                 & (theta[i, :] <= theta_bounds[1])
             )
@@ -735,7 +803,7 @@ def los_projection_vectorized(
         # FS - Hot post shock layer
         # ==========================================================
 
-        hot_start = CD_pos_i + H_FS_cold[i, :]
+        hot_start = FS_cold_outer_i
 
         inside_hot_fs = (r_i >= hot_start) & (r_i <= FS_pos_i) & (theta[i, :] <= theta_bounds[1])
 
