@@ -260,7 +260,7 @@ def make_projection_maps(
     Vectorized 2D projected emission maps with pre-computed properties.
 
     Precomputes shock properties once for all theta, then reuses them
-    during LOS integration. This yields ~50-100x speedup.
+    during LOS integration
 
     Parameters
     ----------
@@ -556,16 +556,11 @@ def los_projection_vectorized(
     U_NTe_RS = np.where(regime_RS == 0.0, f_NTe * U_Th_RS, 0.0)
     U_NTe_FS = np.where(regime_FS == 0.0, f_NTe * U_Th_FS, 0.0)
 
-    # Proton normalization (k0p_RS/k0p_FS) is computed alongside the
-    # electron one but not yet consumed downstream: protons don't
-    # contribute meaningfully to synchrotron emission (radiative losses
-    # scale as 1/mass^2), so nothing here uses it today. Kept
-    # intentionally for a future hadronic-emission channel (e.g.
-    # pion-decay gamma-rays) rather than removed.
-    k0p_RS = k0_p(U_NTp_RS, p_inj=p_inj, Eminp=1e9 * eV)  # noqa: F841
+    # NT distribution normalization used for NT emission
+    k0p_RS = k0_p(U_NTp_RS, p_inj=p_inj, Eminp=1e9 * eV)
     k0e_RS = k0_e(U_NTe_RS, p_inj=p_inj, Emine=1e6 * eV)
 
-    k0p_FS = k0_p(U_NTp_FS, p_inj=p_inj, Eminp=1e9 * eV)  # noqa: F841
+    k0p_FS = k0_p(U_NTp_FS, p_inj=p_inj, Eminp=1e9 * eV)
     k0e_FS = k0_e(U_NTe_FS, p_inj=p_inj, Emine=1e6 * eV)
 
     # =========================
