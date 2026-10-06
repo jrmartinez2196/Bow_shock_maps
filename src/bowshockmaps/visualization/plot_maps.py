@@ -61,10 +61,16 @@ def get_norm(data):
     return LogNorm(vmin=vmin, vmax=1.1 * vmax)
 
 
-def compute_R0_position(inclination, distance, R0_corrected, PA=0.0):
+def compute_R0_position(inclination, distance, R0_corrected):
     """
-    Compute the projected position of the apex on the sky, relative to
-    the star.
+    Compute the projected position of the apex on the sky.
+
+    Calculated from stellar position, in the intrinsic frame (apex
+    along -x from the star, foreshortened by the inclination). The
+    position angle is NOT applied here: it is applied at display time
+    (`update_map_image` / `update_map_arrow` / `update_map_contours`
+    rotate everything by PA - 90 deg), which makes PA measured
+    counterclockwise from North.
 
     Parameters:
     -----------
@@ -75,11 +81,6 @@ def compute_R0_position(inclination, distance, R0_corrected, PA=0.0):
         Source distance [pc]
     R0_corrected : float
         RS distance at the apex including thermal pressure [cm].
-    PA : float
-        Position angle [deg], measured clockwise from North (+y axis,
-        up), with East at PA=90 deg (+x axis, right) -- same
-        convention as `compute_plot_limits` and
-        `maps.los_projection_vectorized`.
 
     Returns:
     --------
@@ -87,14 +88,10 @@ def compute_R0_position(inclination, distance, R0_corrected, PA=0.0):
         Dictionary containing the stellar coordinates
     """
     inc = np.deg2rad(inclination)
-    PA_rad = np.deg2rad(PA)
 
-    # Projected apex distance from the star (foreshortened by
-    # inclination); its direction on the sky is set by PA.
-    R0_proj = arcsecond(R0_corrected * np.cos(inc), distance)
+    x_R0 = -arcsecond(R0_corrected * np.cos(inc), distance)
 
-    x_R0 = R0_proj * np.sin(PA_rad)
-    y_R0 = R0_proj * np.cos(PA_rad)
+    y_R0 = 0.0
 
     return {"x_R0": x_R0, "y_R0": y_R0}
 
@@ -116,7 +113,7 @@ def compute_plot_limits(extent, PA):
 
     xmin, xmax, ymin, ymax = extent
 
-    PA_rot = np.deg2rad(PA + 90.0)
+    PA_rot = np.deg2rad(PA - 90.0)
 
     corners = np.array([[xmin, ymin], [xmin, ymax], [xmax, ymin], [xmax, ymax]])
 

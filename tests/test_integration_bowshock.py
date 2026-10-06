@@ -212,59 +212,55 @@ def test_figure2_renders_all_five_map_panels():
     assert np.isfinite(y_data).all()
 
 
-def test_pa_convention_is_clockwise_from_north():
-    # Regression test: PA is the standard astronomical convention --
-    # measured clockwise from North (+y, up), with East at PA=90 deg
-    # (+x, right). PA=0 should put the apex due north of the star
-    # (x=0, y>0); PA=90 due east (x>0, y=0); PA=270 due west (x<0,
-    # y=0). The earlier (buggy) PA_rot = PA - 90 convention put things
-    # a half-turn (180 deg) off from this.
+def test_pa_is_counterclockwise_from_north_via_display_transform():
+    # PA is measured counterclockwise from North (+y, up) -- the
+    # standard astronomical convention with East on the left of a
+    # North-up sky image. Maps (and the apex marker) are computed in
+    # an intrinsic frame with the apex along -x from the star, and PA is
+    # applied at display time via Affine2D().rotate_deg_around(0, 0,
+    # PA - 90) (see plot_maps.update_map_image/arrow/contours). Check
+    # that composition lands the apex where the convention says:
+    # PA=0 -> North, PA=90 -> East (left), PA=270 -> West (right), and
+    # BD+43's PA=351.5 -> up and slightly to the right.
+    from matplotlib.transforms import Affine2D
+
     from bowshockmaps.visualization.plot_maps import compute_R0_position
 
-    R0_corrected = 1e17  # arbitrary, only the direction matters here
-    distance = 500.0
-    inclination = 30.0  # not edge-on, so there's a nonzero projected offset
+    pos = compute_R0_position(inclination=30.0, distance=500.0, R0_corrected=1e17)
+    apex = np.array([[pos["x_R0"], pos["y_R0"]]])
+    assert apex[0, 0] < 0 and apex[0, 1] == 0  # intrinsic frame: apex along -x
 
-    pos_0 = compute_R0_position(inclination, distance, R0_corrected, PA=0.0)
-    assert pos_0["y_R0"] > 0
-    assert abs(pos_0["x_R0"]) < 1e-6 * abs(pos_0["y_R0"])
+    def displayed(PA):
+        return Affine2D().rotate_deg_around(0.0, 0.0, PA - 90.0).transform(apex)[0]
 
-    pos_90 = compute_R0_position(inclination, distance, R0_corrected, PA=90.0)
-    assert pos_90["x_R0"] > 0
-    assert abs(pos_90["y_R0"]) < 1e-6 * abs(pos_90["x_R0"])
+    x, y = displayed(0.0)
+    assert y > 0 and abs(x) < 1e-9 * abs(y)  # North: straight up
 
-    pos_270 = compute_R0_position(inclination, distance, R0_corrected, PA=270.0)
-    assert pos_270["x_R0"] < 0
-    assert abs(pos_270["y_R0"]) < 1e-6 * abs(pos_270["x_R0"])
+    x, y = displayed(90.0)
+    assert x < 0 and abs(y) < 1e-9 * abs(x)  # East: to the left
+
+    x, y = displayed(270.0)
+    assert x > 0 and abs(y) < 1e-9 * abs(x)  # West: to the right
+
+    x, y = displayed(351.5)  # BD+43: up, slightly to the right
+    assert y > 0 and x > 0 and x < 0.2 * y
 
 
-def test_pa_rotation_actually_rotates_the_emission_map():
-    # Regression test: PA used to be accepted by make_projection_maps
-    # but never forwarded to los_projection_vectorized, so the emission
-    # map was always computed as if PA=0 regardless of the source's
-    # actual PA -- only the plot axis limits (plot_maps.compute_plot_limits)
-    # accounted for it. A non-zero, non-special PA should now visibly
-    # change which map is produced.
-    import matplotlib
+def test_pa_is_not_applied_inside_the_emission_calculation():
+    # Regression test: PA is applied once, at display time. An earlier
+    # change also rotated the pixel grid by PA inside the LOS
+    # integration, which rotated every map twice (and put BD+43's bow
+    # shock pointing the wrong way). The raw maps must therefore NOT
+    # depend on PA.
+    maps = []
+    for PA in (0.0, 45.0):
+        app = BowShock("RXJ0528+2838", convolve=False)
+        app.nx, app.ny, app.nz = 20, 20, 150
+        app.PA = PA
+        app.thermo_data = app.compute_thermo()
+        maps.append(app.compute_maps()["I_OIII"])
 
-    matplotlib.use("Agg")
-
-    app_pa0 = BowShock("RXJ0528+2838", convolve=False)
-    app_pa0.nx, app_pa0.ny, app_pa0.nz = 20, 20, 150
-    app_pa0.PA = 0.0
-    app_pa0.thermo_data = app_pa0.compute_thermo()
-    map_pa0 = app_pa0.compute_maps()
-
-    app_pa45 = BowShock("RXJ0528+2838", convolve=False)
-    app_pa45.nx, app_pa45.ny, app_pa45.nz = 20, 20, 150
-    app_pa45.PA = 45.0
-    app_pa45.thermo_data = app_pa45.compute_thermo()
-    map_pa45 = app_pa45.compute_maps()
-
-    # atol=0: these intensities are physically ~1e-20, far below
-    # np.allclose's default atol=1e-8, which would swamp any real
-    # difference and make every comparison trivially "close".
-    assert not np.allclose(map_pa0["I_OIII"], map_pa45["I_OIII"], atol=0, equal_nan=True)
+    assert np.array_equal(maps[0], maps[1], equal_nan=True)
 
 
 def test_build_layer_boundary_funcs_covers_theta_max_or_degrades_gracefully():

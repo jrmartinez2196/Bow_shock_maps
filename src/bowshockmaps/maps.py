@@ -450,6 +450,11 @@ def make_projection_maps(
         Function R_RS(theta) giving reverse shock radius [cm]
     inclination : float
         Inclination angle [rad]
+    PA : float
+        Accepted for API compatibility but intentionally unused: the
+        maps are computed in the intrinsic frame (apex along -x) and
+        the position angle is applied at display time, by
+        `visualization.plot_maps` (Affine2D rotation by PA - 90 deg).
     zmax : float
         Maximum LOS extent [cm]
     nz : int
@@ -590,7 +595,6 @@ def make_projection_maps(
         Y,
         R_RS_func,
         inclination=inclination,
-        PA=PA,
         zmax=zmax,
         nz=nz,
         lmb=lmb,
@@ -629,7 +633,6 @@ def los_projection_vectorized(
     y,
     R_RS_func,
     inclination=0.0,
-    PA=0.0,
     zmax=5e15,
     nz=500,
     lmb=0.0,
@@ -667,13 +670,6 @@ def los_projection_vectorized(
         Function R_RS(theta) giving reverse shock radius [cm]
     inclination : float
         Inclination angle [rad]
-    PA : float
-        Position angle [deg], measured clockwise from North (+y axis,
-        up), with East at PA=90 deg (+x axis, right) -- standard
-        astronomical convention. Same convention and PA_rot = PA + 90
-        deg formula as `plot_maps.compute_plot_limits`, so the
-        emission map's orientation matches the axis limits computed
-        there for the same PA.
     zmax : float
         Maximum LOS extent [cm]
     nz : int
@@ -708,24 +704,19 @@ def los_projection_vectorized(
 
     ci, si = np.cos(inclination), np.sin(inclination)
 
-    # Rotate the sky-plane pixel grid by the position angle, before the
-    # inclination tilt below. Without this, the emission map itself was
-    # always computed as if PA=0 regardless of the actual PA -- only
-    # the plot axis limits (plot_maps.compute_plot_limits) accounted
-    # for it, which left the two inconsistent with each other. Same
-    # convention (PA_rot = PA - 90 deg) as that function, so the data
-    # and the axes agree.
-    PA_rot = np.deg2rad(PA + 90.0)
-    cPA, sPA = np.cos(PA_rot), np.sin(PA_rot)
-    x_pa = x * cPA - y * sPA
-    y_pa = x * sPA + y * cPA
+    # NOTE: the position angle (PA) is deliberately NOT applied here. The
+    # maps are computed in the intrinsic frame (apex along -x) and PA is
+    # applied at display time -- see plot_maps.update_map_image /
+    # update_map_arrow / update_map_contours (Affine2D rotation by PA-90)
+    # and compute_plot_limits. Applying it here as well would rotate
+    # everything twice.
 
     # LOS grid
     z = np.linspace(-zmax, zmax, nz)
     dz = z[1] - z[0]
 
-    x_flat = x_pa.ravel()[None, :]
-    y_flat = y_pa.ravel()[None, :]
+    x_flat = x.ravel()[None, :]
+    y_flat = y.ravel()[None, :]
     z_grid = z[:, None]
 
     # Rotate coordinates
