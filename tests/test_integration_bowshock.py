@@ -239,3 +239,56 @@ def test_pa_rotation_actually_rotates_the_emission_map():
     # np.allclose's default atol=1e-8, which would swamp any real
     # difference and make every comparison trivially "close".
     assert not np.allclose(map_pa0["I_OIII"], map_pa45["I_OIII"], atol=0, equal_nan=True)
+
+
+def test_build_layer_boundary_funcs_covers_theta_max_or_degrades_gracefully():
+    # Regression test for the "opening wings" artifact at near edge-on
+    # inclination: offsetting the RS curve along its local normal
+    # compresses the resulting boundary's own theta range (see
+    # offset_boundary_along_normal), so a boundary built only from
+    # theta in [0, theta_max] can fall short of theta_max itself,
+    # forcing constant extrapolation that looks like an unphysical
+    # flattening near the edge of the visible structure.
+    #
+    # build_layer_boundary_funcs should either reach theta_max (by
+    # adaptively extending the input range) or, if the analytic
+    # bow-shock shape has no solution that far out for this lam, fail
+    # gracefully (no exception) and get as close as it safely can.
+    from bowshockmaps.maps import build_layer_boundary_funcs
+
+    app = BowShock("RXJ0528+2838", convolve=False)
+    theta_max = np.deg2rad(120)
+
+    funcs = build_layer_boundary_funcs(
+        theta_max=theta_max,
+        lam=app.lam,
+        R0_phys=app.get_R0_corrected(),
+        T_IL=app.T_IL,
+        Mdot=app.Mdot,
+        Vw=app.Vw,
+        wind_regime=app.wind_regime,
+        wind_T_fixed=app.wind_T_fixed,
+        Vstar=app.Vstar,
+        n_ism=app.n_ism,
+    )
+    assert len(funcs) == 4
+
+    # Evaluate each boundary across the full range; none should raise,
+    # and values should stay finite.
+    theta_eval = np.linspace(1e-3, theta_max * 0.999, 200)
+    for f in funcs:
+        vals = f(theta_eval)
+        assert np.isfinite(vals).all()
+
+    # The three least-offset boundaries should now cover the full
+    # range without falling back to constant extrapolation at the end
+    # (RS_hot_outer, CD, FS_cold_outer -- FS_outer is the most-offset
+    # one and may still fall a bit short for this particular source,
+    # per the ODE's own maximum valid opening angle; that's the
+    # graceful-degradation case, not a bug).
+    for f in funcs[:3]:
+        last_vals = f(theta_eval[-10:])
+        assert not np.allclose(last_vals, last_vals[0], rtol=1e-4), (
+            "boundary appears to be flat (constant-extrapolated) near theta_max, "
+            "expected it to keep varying smoothly"
+        )

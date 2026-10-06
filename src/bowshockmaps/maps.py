@@ -221,6 +221,170 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=8e3, *
     return props
 
 
+def build_layer_boundary_funcs(
+    theta_max,
+    lam,
+    R0_phys,
+    T_IL,
+    Mdot,
+    Vw,
+    wind_regime,
+    wind_T_fixed,
+    Vstar,
+    n_ism,
+    n_points=300,
+    initial_pad=1.2,
+    pad_growth=1.5,
+    max_pad=4.0,
+):
+    """
+    Build the four layer-boundary functions (RS hot/cold interface, CD,
+    FS cold/hot interface, FS), each as boundary(theta) -> physical
+    radius [cm], via `offset_boundary_along_normal`.
+
+    Offsetting the RS curve outward along its local normal also shifts
+    points to a *smaller* theta the more the surface tilts away from
+    radial (see `offset_boundary_along_normal`'s docstring) -- so a
+    boundary built from theta in [0, theta_max] generally does not
+    itself reach all the way to theta_max; interp1d then has to hold
+    it constant (extrapolate) beyond whatever it does reach, which can
+    look like an unphysical "flattening" or "flaring" near the edge of
+    the model's angular range, especially visible near edge-on
+    inclinations where that whole range projects into view.
+
+    To avoid that, build the curve from an *extended* input theta range
+    (theta_max * pad, pad > 1) -- genuinely re-integrating the shock
+    shape out there, not just evaluating R_RS_func beyond its own
+    domain (which would hit the same kind of plateau) -- and grow pad
+    adaptively until the resulting boundary actually covers theta_max,
+    or until max_pad is reached.
+
+    Parameters
+    ----------
+    theta_max : float
+        The model's nominal angular range [rad]; the boundary functions
+        must cover at least this range without falling back to
+        constant extrapolation.
+    lam, R0_phys, T_IL, Mdot, Vw, wind_regime, wind_T_fixed, Vstar, n_ism :
+        Same physical parameters as elsewhere in this module.
+    n_points : int
+        Number of theta samples per attempt.
+    initial_pad, pad_growth, max_pad : float
+        Start by integrating out to theta_max*initial_pad; if the
+        resulting boundaries don't yet cover theta_max, multiply the
+        pad by pad_growth and retry, up to max_pad.
+
+    Returns
+    -------
+    RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func : callable
+    """
+
+    def _curves_at(theta_max_ext):
+        """Build the four (theta_new, r_new) boundary curves from an
+        integration out to theta_max_ext. Raises RuntimeError (propagated
+        from the ODE solver) if theta_max_ext exceeds the analytic
+        bow-shock shape's maximum valid opening angle for this lam."""
+        thr_ext_curve, rr_ext_curve = integrate_r_theta_christie(
+            lam=lam, R0=1.0, theta_max=theta_max_ext
+        )
+        r_interp_ext = interp1d(
+            thr_ext_curve,
+            rr_ext_curve,
+            bounds_error=False,
+            fill_value=(rr_ext_curve[0], rr_ext_curve[-1]),
+        )
+        theta_grid_ext = np.linspace(1e-6, theta_max_ext, n_points)
+        rr_grid_ext = r_interp_ext(theta_grid_ext)
+        R_RS_phys_ext = rr_grid_ext * R0_phys
+
+        rs_props_ext = precompute_shock_properties(
+            theta_grid_ext,
+            rr_grid_ext,
+            R0_phys,
+            "RS",
+            T_IL=T_IL,
+            Mdot=Mdot,
+            Vw=Vw,
+            lam=lam,
+            wind_regime=wind_regime,
+            wind_T_fixed=wind_T_fixed,
+        )
+        fs_props_ext = precompute_shock_properties(
+            theta_grid_ext,
+            rr_grid_ext,
+            R0_phys,
+            "FS",
+            T_IL=T_IL,
+            Vstar=Vstar,
+            n_ism=n_ism,
+            lam=lam,
+        )
+
+        H_RS_hot_ext = rs_props_ext["H_hot"](theta_grid_ext)
+        H_RS_cold_ext = rs_props_ext["H_cold"](theta_grid_ext)
+        H_FS_cold_ext = fs_props_ext["H_cold"](theta_grid_ext)
+        H_FS_hot_ext = fs_props_ext["H_hot"](theta_grid_ext)
+
+        cumulative_offsets = [
+            H_RS_hot_ext,
+            H_RS_hot_ext + H_RS_cold_ext,
+            H_RS_hot_ext + H_RS_cold_ext + H_FS_cold_ext,
+            H_RS_hot_ext + H_RS_cold_ext + H_FS_cold_ext + H_FS_hot_ext,
+        ]
+        return [
+            offset_boundary_along_normal(theta_grid_ext, rr_grid_ext, R_RS_phys_ext, H_cum, lam)
+            for H_cum in cumulative_offsets
+        ]
+
+    pad = initial_pad
+    last_good_curves = None
+    curves = None
+
+    while True:
+        theta_max_ext = theta_max * pad
+        try:
+            curves = _curves_at(theta_max_ext)
+        except RuntimeError:
+            # The analytic bow-shock shape has a maximum valid opening
+            # angle for this lam (an asymptotic "Mach cone" angle)
+            # beyond which no solution exists -- this pad pushed past
+            # it. Fall back to the largest extension that *did* work,
+            # or, if even the first (smallest) padding already failed,
+            # to the unextended theta_max itself.
+            curves = last_good_curves if last_good_curves is not None else _curves_at(theta_max)
+            coverage = min(th_new[-1] for th_new, _ in curves)
+            logger.warning(
+                "Could not extend theta range to %.1f deg for this lam (bow-shock "
+                "shape has no solution that far out); layer-boundary curves only "
+                "reach theta=%.1f deg (target was theta_max=%.1f deg), using "
+                "constant extrapolation beyond that.",
+                np.degrees(theta_max_ext),
+                np.degrees(coverage),
+                np.degrees(theta_max),
+            )
+            break
+
+        coverage = min(th_new[-1] for th_new, _ in curves)
+        if coverage >= theta_max or pad >= max_pad:
+            if coverage < theta_max:
+                logger.warning(
+                    "Layer-boundary curves only reach theta=%.1f deg (< theta_max=%.1f "
+                    "deg) even after padding input theta to %.1f deg; using constant "
+                    "extrapolation beyond that.",
+                    np.degrees(coverage),
+                    np.degrees(theta_max),
+                    np.degrees(theta_max_ext),
+                )
+            break
+        last_good_curves = curves
+        pad *= pad_growth
+
+    return tuple(
+        interp1d(th_new, r_new, bounds_error=False, fill_value=(r_new[0], r_new[-1]))
+        for th_new, r_new in curves
+    )
+
+
 def make_projection_maps(
     xmin,
     xmax,
@@ -380,31 +544,22 @@ def make_projection_maps(
     # to the radial coordinate R_RS(theta) at fixed theta -- the bow
     # shock isn't spherically symmetric, so away from the apex those
     # are not the same thing (see `offset_boundary_along_normal`).
-    # Built once here, on the theta_precomp grid, then reused for
-    # every pixel/LOS-step via interpolation, same as R_RS_func.
+    # Built from an adaptively-extended theta range so each boundary
+    # actually covers [0, theta_max] (see `build_layer_boundary_funcs`),
+    # then reused for every pixel/LOS-step via interpolation, same as
+    # R_RS_func.
     # ==========================================================
-    R_RS_precomp_phys = rr_precomp * R0_phys
-    H_RS_hot_precomp = rs_props["H_hot"](theta_precomp)
-    H_RS_cold_precomp = rs_props["H_cold"](theta_precomp)
-    H_FS_cold_precomp = fs_props["H_cold"](theta_precomp)
-    H_FS_hot_precomp = fs_props["H_hot"](theta_precomp)
-
-    def _boundary_func(H_cumulative):
-        th_new, r_new = offset_boundary_along_normal(
-            theta_precomp, rr_precomp, R_RS_precomp_phys, H_cumulative, lam
-        )
-        return interp1d(
-            th_new,
-            r_new,
-            bounds_error=False,
-            fill_value=(r_new[0], r_new[-1]),
-        )
-
-    RS_hot_outer_func = _boundary_func(H_RS_hot_precomp)
-    CD_func = _boundary_func(H_RS_hot_precomp + H_RS_cold_precomp)
-    FS_cold_outer_func = _boundary_func(H_RS_hot_precomp + H_RS_cold_precomp + H_FS_cold_precomp)
-    FS_outer_func = _boundary_func(
-        H_RS_hot_precomp + H_RS_cold_precomp + H_FS_cold_precomp + H_FS_hot_precomp
+    RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func = build_layer_boundary_funcs(
+        theta_max=theta_max,
+        lam=lam,
+        R0_phys=R0_phys,
+        T_IL=T_IL,
+        Mdot=Mdot,
+        Vw=Vw,
+        wind_regime=wind_regime,
+        wind_T_fixed=wind_T_fixed,
+        Vstar=Vstar,
+        n_ism=n_ism,
     )
 
     # Generate 2D coordinate grid
