@@ -336,12 +336,19 @@ def build_layer_boundary_funcs(
             for H_cum in cumulative_offsets
         ]
 
+    # theta is a polar angle measured from the apex: it cannot exceed
+    # pi (180 deg) no matter how much padding is requested -- that's a
+    # hard geometric ceiling, separate from (and tighter than, in
+    # general) whatever opening angle the analytic bow-shock shape's
+    # own asymptotic limit allows for a given lam.
+    theta_hard_limit = np.pi - 1e-3
+
     pad = initial_pad
     last_good_curves = None
     curves = None
 
     while True:
-        theta_max_ext = theta_max * pad
+        theta_max_ext = min(theta_max * pad, theta_hard_limit)
         try:
             curves = _curves_at(theta_max_ext)
         except RuntimeError:
@@ -365,15 +372,21 @@ def build_layer_boundary_funcs(
             break
 
         coverage = min(th_new[-1] for th_new, _ in curves)
-        if coverage >= theta_max or pad >= max_pad:
+        at_hard_limit = theta_max_ext >= theta_hard_limit
+        if coverage >= theta_max or pad >= max_pad or at_hard_limit:
             if coverage < theta_max:
                 logger.warning(
                     "Layer-boundary curves only reach theta=%.1f deg (< theta_max=%.1f "
-                    "deg) even after padding input theta to %.1f deg; using constant "
+                    "deg) even after padding input theta to %.1f deg%s; using constant "
                     "extrapolation beyond that.",
                     np.degrees(coverage),
                     np.degrees(theta_max),
                     np.degrees(theta_max_ext),
+                    (
+                        " (the geometric ceiling: theta cannot exceed 180 deg)"
+                        if at_hard_limit
+                        else ""
+                    ),
                 )
             break
         last_good_curves = curves
