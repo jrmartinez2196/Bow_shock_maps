@@ -90,7 +90,7 @@ def test_layer_thickness_is_frozen_below_theta_min_near_apex():
         H_total,
         t_cool,
         t_adv,
-    ) = post_shock_conditions(theta, rr, "FS", R0_phys, T_IL=8e3, Vstar=50e5, n_ism=0.2, lam=0.0)
+    ) = post_shock_conditions(theta, rr, "FS", R0_phys, T_IL=8e3, Vstar=50e5, n_ism=0.2, lam=0.02)
 
     theta_min = 0.1  # rad, matches the cutoff used internally
     below = theta < theta_min

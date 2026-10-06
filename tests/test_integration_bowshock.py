@@ -263,54 +263,113 @@ def test_pa_is_not_applied_inside_the_emission_calculation():
     assert np.array_equal(maps[0], maps[1], equal_nan=True)
 
 
-def test_build_layer_boundary_funcs_covers_theta_max_or_degrades_gracefully():
-    # Regression test for the "opening wings" artifact at near edge-on
-    # inclination: offsetting the RS curve along its local normal
-    # compresses the resulting boundary's own theta range (see
-    # offset_boundary_along_normal), so a boundary built only from
-    # theta in [0, theta_max] can fall short of theta_max itself,
-    # forcing constant extrapolation that looks like an unphysical
-    # flattening near the edge of the visible structure.
-    #
-    # build_layer_boundary_funcs should either reach theta_max (by
-    # adaptively extending the input range) or, if the analytic
-    # bow-shock shape has no solution that far out for this lam, fail
-    # gracefully (no exception) and get as close as it safely can.
+def test_layer_boundaries_do_not_exist_beyond_their_coverage():
+    # Offsetting the RS curve along its normal pulls points back to
+    # smaller polar angle, so each boundary covers a narrower range of
+    # theta than the arc it came from. Beyond that range the boundary
+    # (and any layer needing it) must simply not exist (NaN) -- not be
+    # held constant (a flat arc) nor be fabricated by evaluating the
+    # shock physics at angles outside the modeled domain.
     from bowshockmaps.maps import build_layer_boundary_funcs
+    from bowshockmaps.physics.bow_shock_surface import integrate_r_theta_christie
 
-    app = BowShock("RXJ0528+2838", convolve=False)
     theta_max = np.deg2rad(120)
+    thr, rr = integrate_r_theta_christie(lam=0.02, R0=1.0, theta_max=theta_max)
+    theta = np.linspace(1e-6, theta_max, 300)
+    rr = np.interp(theta, thr, rr)
+    R0 = 1e17
+    H = np.full_like(theta, 0.15 * R0)  # a thick-ish layer, so the compression is clear
 
     funcs = build_layer_boundary_funcs(
-        theta_max=theta_max,
-        lam=app.lam,
-        R0_phys=app.get_R0_corrected(),
-        T_IL=app.T_IL,
-        Mdot=app.Mdot,
-        Vw=app.Vw,
-        wind_regime=app.wind_regime,
-        wind_T_fixed=app.wind_T_fixed,
-        Vstar=app.Vstar,
-        n_ism=app.n_ism,
+        theta, rr, R0, 0.02, H_RS_hot=H, H_RS_cold=H, H_FS_cold=H, H_FS_hot=H
     )
     assert len(funcs) == 4
 
-    # Evaluate each boundary across the full range; none should raise,
-    # and values should stay finite.
-    theta_eval = np.linspace(1e-3, theta_max * 0.999, 200)
+    # Well inside the modeled range every boundary exists and is finite...
+    inside = np.deg2rad(np.array([5.0, 30.0, 60.0]))
     for f in funcs:
-        vals = f(theta_eval)
-        assert np.isfinite(vals).all()
+        assert np.isfinite(f(inside)).all()
 
-    # The three least-offset boundaries should now cover the full
-    # range without falling back to constant extrapolation at the end
-    # (RS_hot_outer, CD, FS_cold_outer -- FS_outer is the most-offset
-    # one and may still fall a bit short for this particular source,
-    # per the ODE's own maximum valid opening angle; that's the
-    # graceful-degradation case, not a bug).
-    for f in funcs[:3]:
-        last_vals = f(theta_eval[-10:])
-        assert not np.allclose(last_vals, last_vals[0], rtol=1e-4), (
-            "boundary appears to be flat (constant-extrapolated) near theta_max, "
-            "expected it to keep varying smoothly"
+    # ...they are nested (each farther from the star than the previous)...
+    vals = np.array([f(inside) for f in funcs])
+    assert np.all(np.diff(vals, axis=0) > 0)
+
+    # ...and the outermost one stops short of theta_max (NaN beyond),
+    # rather than reaching it by extrapolation.
+    assert np.isnan(funcs[-1](theta_max))
+
+
+def test_no_shock_when_normal_mach_number_is_subsonic():
+    # Regression test: for a slow star the normal Mach number of the
+    # forward shock drops below 1 at large theta (BD+43: M ~ 2 at 120
+    # deg, < 1 by ~140 deg). There is no shock there. The
+    # Rankine-Hugoniot relations are invalid below M=1 and gave negative
+    # temperatures (-> "invalid value encountered in power" in
+    # lambda_T); post_shock_conditions must instead return ambient
+    # conditions and zero layer thickness, with no warnings.
+    import warnings
+
+    from bowshockmaps.physics.bow_shock_surface import integrate_r_theta_christie
+    from bowshockmaps.physics.thermodynamics import (
+        post_shock_conditions,
+        pre_shock_ism,
+        vnorm_forward,
+    )
+
+    app = BowShock("BD+43", convolve=False)
+    lam = app.lam
+    thr, rr_c = integrate_r_theta_christie(lam=lam, R0=1.0, theta_max=np.deg2rad(160))
+    theta = np.linspace(0.01, np.deg2rad(160), 300)
+    rr = np.interp(theta, thr, rr_c)
+
+    _, _, _, cs_pre = pre_shock_ism(app.Vstar, app.n_ism, lam)
+    M = vnorm_forward(theta, rr, lam, app.Vstar) / cs_pre
+    assert np.any(M < 1) and np.any(M > 1)  # the test is only meaningful if both occur
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", RuntimeWarning)
+        out = post_shock_conditions(
+            theta,
+            rr,
+            "FS",
+            app.get_R0_corrected(),
+            T_IL=app.T_IL,
+            Vstar=app.Vstar,
+            n_ism=app.n_ism,
+            lam=lam,
         )
+    n_post, T_post, _, T_rec, _, _, H_hot, H_cold, H_total, _, _ = out
+
+    no_shock = M <= 1
+    assert np.isfinite(T_post).all() and np.all(T_post > 0)
+    assert np.isfinite(T_rec).all() and np.all(T_rec > 0)
+    assert np.all(H_total[no_shock] == 0)
+    assert np.all(H_hot[no_shock] == 0) and np.all(H_cold[no_shock] == 0)
+    assert np.all(H_total[~no_shock] >= 0)
+
+
+def test_bd43_maps_stay_compact_and_warning_free():
+    # Regression test: an earlier "adaptive extension" of the layer
+    # boundaries evaluated the shock physics at theta up to ~180 deg,
+    # where BD+43's forward shock has no solution (M < 1). That raised
+    # the lambda_T "invalid value encountered in power" warning and made
+    # the forward shock fill the whole field of view. The emission must
+    # be confined to the modeled shell: the corners of a generous field
+    # of view stay empty.
+    import warnings
+
+    app = BowShock("BD+43", convolve=False)
+    app.nx, app.ny, app.nz = 30, 30, 150
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        app.thermo_data = app.compute_thermo()
+        maps = app.compute_maps()
+
+    assert not any("invalid value encountered in power" in str(w.message) for w in caught)
+
+    for key in ("I_Halpha", "I_OIII", "I_ff_total"):
+        img = maps[key]
+        assert np.isfinite(img).all()
+        for corner in (img[0, 0], img[0, -1], img[-1, 0], img[-1, -1]):
+            assert corner == 0

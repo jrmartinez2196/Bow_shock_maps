@@ -538,6 +538,17 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     # Mach number
     M = v_perp / cs_pre
 
+    # Where the normal Mach number is <= 1 there is no shock at all: the
+    # flow across the surface is subsonic. The Rankine-Hugoniot relations
+    # below are only valid for M > 1 and give nonsense under it (the
+    # compression tends to 0 instead of 1, and pressure/temperature go
+    # negative for M < ~0.45 -- which is what raised "invalid value
+    # encountered in power" in lambda_T). Evaluate the jump conditions at
+    # M = 1 there (no compression, no heating: just the ambient gas) and
+    # give those angles zero layer thickness at the end of the function.
+    no_shock = ~(M > 1.0)  # also catches NaN
+    M = np.where(no_shock, 1.0, M)
+
     # Compression factor (Rankine-Hugoniot)
     comp = (gamma_ad + 1.0) * M**2 / ((gamma_ad - 1.0) * M**2 + 2.0)
 
@@ -705,6 +716,11 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
         H_hot[below_cutoff] = H_hot[i_min]
         H_cold[below_cutoff] = H_cold[i_min]
         H_total[below_cutoff] = H_total[i_min]
+
+    # No shock (M <= 1) -> no shocked layer.
+    H_hot[no_shock] = 0.0
+    H_cold[no_shock] = 0.0
+    H_total[no_shock] = 0.0
 
     return (
         n_post,

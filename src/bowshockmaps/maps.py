@@ -221,181 +221,64 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=8e3, *
     return props
 
 
-def build_layer_boundary_funcs(
-    theta_max,
-    lam,
-    R0_phys,
-    T_IL,
-    Mdot,
-    Vw,
-    wind_regime,
-    wind_T_fixed,
-    Vstar,
-    n_ism,
-    n_points=300,
-    initial_pad=1.2,
-    pad_growth=1.5,
-    max_pad=4.0,
-):
+def build_layer_boundary_funcs(theta, rr, R0_phys, lam, H_RS_hot, H_RS_cold, H_FS_cold, H_FS_hot):
     """
     Build the four layer-boundary functions (RS hot/cold interface, CD,
     FS cold/hot interface, FS), each as boundary(theta) -> physical
-    radius [cm], via `offset_boundary_along_normal`.
+    radius [cm], by offsetting the RS curve along its local normal
+    (see `offset_boundary_along_normal`).
 
-    Offsetting the RS curve outward along its local normal also shifts
-    points to a *smaller* theta the more the surface tilts away from
-    radial (see `offset_boundary_along_normal`'s docstring) -- so a
-    boundary built from theta in [0, theta_max] generally does not
-    itself reach all the way to theta_max; interp1d then has to hold
-    it constant (extrapolate) beyond whatever it does reach, which can
-    look like an unphysical "flattening" or "flaring" near the edge of
-    the model's angular range, especially visible near edge-on
-    inclinations where that whole range projects into view.
+    The layers only exist where the RS arc that generates them exists:
+    the modeled domain is theta in [0, theta_max]. Offsetting a point
+    along the normal also pulls it back toward smaller polar angle, so
+    each boundary curve covers a somewhat narrower range of polar angle
+    than the arc it came from, and the more it is offset the narrower
+    the range. Beyond the angle a boundary reaches, that boundary (and
+    so every layer that needs it) simply does not exist, and the
+    function returns NaN there; callers must treat NaN as "no layer".
 
-    To avoid that, build the curve from an *extended* input theta range
-    (theta_max * pad, pad > 1) -- genuinely re-integrating the shock
-    shape out there, not just evaluating R_RS_func beyond its own
-    domain (which would hit the same kind of plateau) -- and grow pad
-    adaptively until the resulting boundary actually covers theta_max,
-    or until max_pad is reached.
+    Earlier versions instead extended the input theta range beyond
+    theta_max to make the boundaries cover [0, theta_max], or held them
+    constant beyond their range. Both invent structure that is not in
+    the model: the first evaluates the shock physics where it has no
+    solution (for slow stars the normal Mach number drops below 1 and
+    there is no shock at all), the second draws a flat arc.
 
     Parameters
     ----------
-    theta_max : float
-        The model's nominal angular range [rad]; the boundary functions
-        must cover at least this range without falling back to
-        constant extrapolation.
-    lam, R0_phys, T_IL, Mdot, Vw, wind_regime, wind_T_fixed, Vstar, n_ism :
-        Same physical parameters as elsewhere in this module.
-    n_points : int
-        Number of theta samples per attempt.
-    initial_pad, pad_growth, max_pad : float
-        Start by integrating out to theta_max*initial_pad; if the
-        resulting boundaries don't yet cover theta_max, multiply the
-        pad by pad_growth and retry, up to max_pad.
+    theta : array
+        Polar angle grid of the RS curve [rad], covering the modeled
+        range [~0, theta_max].
+    rr : array
+        Normalized RS radius r/R0 at `theta`.
+    R0_phys : float
+        Physical standoff distance R0 [cm].
+    lam : float
+        Thermal-pressure parameter (passed to `AA` for the normal).
+    H_RS_hot, H_RS_cold, H_FS_cold, H_FS_hot : array
+        Layer thicknesses [cm] along the local normal, at `theta`.
 
     Returns
     -------
     RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func : callable
+        Each maps polar angle [rad] -> radius [cm] (NaN outside the
+        range that boundary covers).
     """
+    R_phys = rr * R0_phys
+    cumulative_offsets = [
+        H_RS_hot,
+        H_RS_hot + H_RS_cold,
+        H_RS_hot + H_RS_cold + H_FS_cold,
+        H_RS_hot + H_RS_cold + H_FS_cold + H_FS_hot,
+    ]
 
-    def _curves_at(theta_max_ext):
-        """Build the four (theta_new, r_new) boundary curves from an
-        integration out to theta_max_ext. Raises RuntimeError (propagated
-        from the ODE solver) if theta_max_ext exceeds the analytic
-        bow-shock shape's maximum valid opening angle for this lam."""
-        thr_ext_curve, rr_ext_curve = integrate_r_theta_christie(
-            lam=lam, R0=1.0, theta_max=theta_max_ext
-        )
-        r_interp_ext = interp1d(
-            thr_ext_curve,
-            rr_ext_curve,
-            bounds_error=False,
-            fill_value=(rr_ext_curve[0], rr_ext_curve[-1]),
-        )
-        theta_grid_ext = np.linspace(1e-6, theta_max_ext, n_points)
-        rr_grid_ext = r_interp_ext(theta_grid_ext)
-        R_RS_phys_ext = rr_grid_ext * R0_phys
-
-        rs_props_ext = precompute_shock_properties(
-            theta_grid_ext,
-            rr_grid_ext,
-            R0_phys,
-            "RS",
-            T_IL=T_IL,
-            Mdot=Mdot,
-            Vw=Vw,
-            lam=lam,
-            wind_regime=wind_regime,
-            wind_T_fixed=wind_T_fixed,
-        )
-        fs_props_ext = precompute_shock_properties(
-            theta_grid_ext,
-            rr_grid_ext,
-            R0_phys,
-            "FS",
-            T_IL=T_IL,
-            Vstar=Vstar,
-            n_ism=n_ism,
-            lam=lam,
-        )
-
-        H_RS_hot_ext = rs_props_ext["H_hot"](theta_grid_ext)
-        H_RS_cold_ext = rs_props_ext["H_cold"](theta_grid_ext)
-        H_FS_cold_ext = fs_props_ext["H_cold"](theta_grid_ext)
-        H_FS_hot_ext = fs_props_ext["H_hot"](theta_grid_ext)
-
-        cumulative_offsets = [
-            H_RS_hot_ext,
-            H_RS_hot_ext + H_RS_cold_ext,
-            H_RS_hot_ext + H_RS_cold_ext + H_FS_cold_ext,
-            H_RS_hot_ext + H_RS_cold_ext + H_FS_cold_ext + H_FS_hot_ext,
-        ]
-        return [
-            offset_boundary_along_normal(theta_grid_ext, rr_grid_ext, R_RS_phys_ext, H_cum, lam)
-            for H_cum in cumulative_offsets
-        ]
-
-    # theta is a polar angle measured from the apex: it cannot exceed
-    # pi (180 deg) no matter how much padding is requested -- that's a
-    # hard geometric ceiling, separate from (and tighter than, in
-    # general) whatever opening angle the analytic bow-shock shape's
-    # own asymptotic limit allows for a given lam.
-    theta_hard_limit = np.pi - 1e-3
-
-    pad = initial_pad
-    last_good_curves = None
-    curves = None
-
-    while True:
-        theta_max_ext = min(theta_max * pad, theta_hard_limit)
-        try:
-            curves = _curves_at(theta_max_ext)
-        except RuntimeError:
-            # The analytic bow-shock shape has a maximum valid opening
-            # angle for this lam (an asymptotic "Mach cone" angle)
-            # beyond which no solution exists -- this pad pushed past
-            # it. Fall back to the largest extension that *did* work,
-            # or, if even the first (smallest) padding already failed,
-            # to the unextended theta_max itself.
-            curves = last_good_curves if last_good_curves is not None else _curves_at(theta_max)
-            coverage = min(th_new[-1] for th_new, _ in curves)
-            logger.warning(
-                "Could not extend theta range to %.1f deg for this lam (bow-shock "
-                "shape has no solution that far out); layer-boundary curves only "
-                "reach theta=%.1f deg (target was theta_max=%.1f deg), using "
-                "constant extrapolation beyond that.",
-                np.degrees(theta_max_ext),
-                np.degrees(coverage),
-                np.degrees(theta_max),
-            )
-            break
-
-        coverage = min(th_new[-1] for th_new, _ in curves)
-        at_hard_limit = theta_max_ext >= theta_hard_limit
-        if coverage >= theta_max or pad >= max_pad or at_hard_limit:
-            if coverage < theta_max:
-                logger.warning(
-                    "Layer-boundary curves only reach theta=%.1f deg (< theta_max=%.1f "
-                    "deg) even after padding input theta to %.1f deg%s; using constant "
-                    "extrapolation beyond that.",
-                    np.degrees(coverage),
-                    np.degrees(theta_max),
-                    np.degrees(theta_max_ext),
-                    (
-                        " (the geometric ceiling: theta cannot exceed 180 deg)"
-                        if at_hard_limit
-                        else ""
-                    ),
-                )
-            break
-        last_good_curves = curves
-        pad *= pad_growth
-
-    return tuple(
-        interp1d(th_new, r_new, bounds_error=False, fill_value=(r_new[0], r_new[-1]))
-        for th_new, r_new in curves
-    )
+    funcs = []
+    for H_cum in cumulative_offsets:
+        th_new, r_new = offset_boundary_along_normal(theta, rr, R_phys, H_cum, lam)
+        finite = np.isfinite(th_new) & np.isfinite(r_new)
+        th_new, r_new = th_new[finite], r_new[finite]
+        funcs.append(interp1d(th_new, r_new, bounds_error=False, fill_value=(r_new[0], np.nan)))
+    return tuple(funcs)
 
 
 def make_projection_maps(
@@ -562,22 +445,20 @@ def make_projection_maps(
     # to the radial coordinate R_RS(theta) at fixed theta -- the bow
     # shock isn't spherically symmetric, so away from the apex those
     # are not the same thing (see `offset_boundary_along_normal`).
-    # Built from an adaptively-extended theta range so each boundary
-    # actually covers [0, theta_max] (see `build_layer_boundary_funcs`),
-    # then reused for every pixel/LOS-step via interpolation, same as
+    # Each boundary only exists over the range of polar angle its curve
+    # reaches (NaN beyond it -- see `build_layer_boundary_funcs`), then
+    # reused for every pixel/LOS-step via interpolation, same as
     # R_RS_func.
     # ==========================================================
     RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func = build_layer_boundary_funcs(
-        theta_max=theta_max,
-        lam=lam,
-        R0_phys=R0_phys,
-        T_IL=T_IL,
-        Mdot=Mdot,
-        Vw=Vw,
-        wind_regime=wind_regime,
-        wind_T_fixed=wind_T_fixed,
-        Vstar=Vstar,
-        n_ism=n_ism,
+        theta_precomp,
+        rr_precomp,
+        R0_phys,
+        lam,
+        H_RS_hot=rs_props["H_hot"](theta_precomp),
+        H_RS_cold=rs_props["H_cold"](theta_precomp),
+        H_FS_cold=fs_props["H_cold"](theta_precomp),
+        H_FS_hot=fs_props["H_hot"](theta_precomp),
     )
 
     # Generate 2D coordinate grid
@@ -687,7 +568,9 @@ def los_projection_vectorized(
         (RS hot/cold interface, contact discontinuity, FS cold/hot
         interface, forward shock), built by offsetting the RS curve
         along its local normal (see `offset_boundary_along_normal`)
-        rather than added directly to R_RS(theta) at fixed theta.
+        rather than added directly to R_RS(theta) at fixed theta. They
+        return NaN where that boundary does not exist, which means "no
+        layer there".
     nu_ff : float
         Frequency for free-free emission [Hz]
 
@@ -829,10 +712,27 @@ def los_projection_vectorized(
     # physical layers are strictly nested by construction (each boundary
     # is always farther from the star than the previous one), so enforce
     # that explicitly rather than let interpolation noise violate it.
+    #
+    # np.maximum propagates NaN, which is what we want: a boundary that
+    # does not exist (NaN, see build_layer_boundary_funcs) makes every
+    # boundary outside it nonexistent too -- an outer layer cannot exist
+    # without the inner ones.
     RS_hot_outer = np.maximum(RS_hot_outer, R_RS)
     CD_pos = np.maximum(CD_pos, RS_hot_outer)
     FS_cold_outer = np.maximum(FS_cold_outer, CD_pos)
     FS_pos = np.maximum(FS_pos, FS_cold_outer)
+
+    # A layer exists only where both of its boundaries do. Record that
+    # explicitly (and replace NaN by a finite value) so the masks below
+    # never compare against NaN.
+    ok_rs_hot = np.isfinite(RS_hot_outer)
+    ok_cd = np.isfinite(CD_pos)
+    ok_fs_cold = np.isfinite(FS_cold_outer)
+    ok_fs = np.isfinite(FS_pos)
+    RS_hot_outer = np.where(ok_rs_hot, RS_hot_outer, 0.0)
+    CD_pos = np.where(ok_cd, CD_pos, 0.0)
+    FS_cold_outer = np.where(ok_fs_cold, FS_cold_outer, 0.0)
+    FS_pos = np.where(ok_fs, FS_pos, 0.0)
 
     # =========================
     # LOS INTEGRATION
@@ -853,7 +753,12 @@ def los_projection_vectorized(
         # RS - Hot post shock layer
         # ==========================================================
 
-        inside_hot_rs = (r_i >= R_RS_i) & (r_i <= RS_hot_outer_i) & (theta[i, :] <= theta_bounds[1])
+        inside_hot_rs = (
+            (r_i >= R_RS_i)
+            & (r_i <= RS_hot_outer_i)
+            & ok_rs_hot[i, :]
+            & (theta[i, :] <= theta_bounds[1])
+        )
 
         ion_H = np.ones_like(
             r_i
@@ -901,6 +806,7 @@ def los_projection_vectorized(
             inside_cold_rs = (
                 (r_i >= RS_hot_outer_i)
                 & (r_i <= CD_pos_i)
+                & ok_cd[i, :]
                 & (H_RS_cold[i, :] > 0)
                 & (theta[i, :] <= theta_bounds[1])
             )
@@ -941,6 +847,7 @@ def los_projection_vectorized(
             inside_cold_fs = (
                 (r_i >= CD_pos_i)
                 & (r_i <= FS_cold_outer_i)
+                & ok_fs_cold[i, :]
                 & (H_FS_cold[i, :] > 0)
                 & (theta[i, :] <= theta_bounds[1])
             )
@@ -980,7 +887,9 @@ def los_projection_vectorized(
 
         hot_start = FS_cold_outer_i
 
-        inside_hot_fs = (r_i >= hot_start) & (r_i <= FS_pos_i) & (theta[i, :] <= theta_bounds[1])
+        inside_hot_fs = (
+            (r_i >= hot_start) & (r_i <= FS_pos_i) & ok_fs[i, :] & (theta[i, :] <= theta_bounds[1])
+        )
 
         ion_H = np.ones_like(r_i)
         ion_O = np.ones_like(r_i)
