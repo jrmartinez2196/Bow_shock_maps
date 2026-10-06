@@ -14,9 +14,9 @@ import numpy as np
 class GridConfig:
     """Grid resolution and line-of-sight integration settings."""
 
-    nx: int = 50
-    ny: int = 50
-    nz: int = 5000
+    nx: int = 100
+    ny: int = 100
+    nz: int = 1000
     zmax: float = 10.0  # In R0 units
     max_theta: float = np.deg2rad(120.0)
 

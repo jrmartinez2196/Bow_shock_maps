@@ -447,8 +447,8 @@ class BowShock:
         fwhm = self.get_beam_fwhm(R0_proj)
 
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-            xmin=-(2.0 + 2.0 * sini**2) * R0_corrected,
-            xmax=(6.0 + 2.0 * sini**2) * R0_corrected,
+            xmin=-(4.0 + 2.0 * sini**2) * R0_corrected,
+            xmax=(4.0 + 2.0 * sini**2) * R0_corrected,
             ymin=-(4.0 + 2.0 * sini**2) * R0_corrected,
             ymax=(4.0 + 2.0 * sini**2) * R0_corrected,
             nx=self.nx,

@@ -689,6 +689,23 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     # Total thickness = hot layer + cold layer
     H_total = H_hot + H_cold
 
+    # Near the symmetry axis (theta -> 0), the mass-flux argument behind
+    # the dot_M-based layer-thickness formula above (whichever of
+    # H_hot/H_cold uses it, depending on regime) has a genuine geometric
+    # singularity: its denominator carries a sin(theta) factor from the
+    # "ring" mass flux picture, which vanishes at theta=0. Rather than
+    # trust that formula arbitrarily close to the axis, freeze the
+    # layer thickness to its value at a small cutoff theta_min for
+    # everything below it -- same approach used in the reference
+    # Fortran implementation this model is based on.
+    theta_min = 0.1  # rad
+    below_cutoff = thr < theta_min
+    if np.any(below_cutoff) and np.any(~below_cutoff):
+        i_min = np.argmax(~below_cutoff)  # first index with thr >= theta_min
+        H_hot[below_cutoff] = H_hot[i_min]
+        H_cold[below_cutoff] = H_cold[i_min]
+        H_total[below_cutoff] = H_total[i_min]
+
     return (
         n_post,
         T_post,

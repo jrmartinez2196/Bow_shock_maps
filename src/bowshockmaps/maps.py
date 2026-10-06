@@ -422,6 +422,7 @@ def make_projection_maps(
         Y,
         R_RS_func,
         inclination=inclination,
+        PA=PA,
         zmax=zmax,
         nz=nz,
         lmb=lmb,
@@ -460,6 +461,7 @@ def los_projection_vectorized(
     y,
     R_RS_func,
     inclination=0.0,
+    PA=0.0,
     zmax=5e15,
     nz=500,
     lmb=0.0,
@@ -497,6 +499,11 @@ def los_projection_vectorized(
         Function R_RS(theta) giving reverse shock radius [cm]
     inclination : float
         Inclination angle [rad]
+    PA : float
+        Position angle [deg], measured the same way as
+        `plot_maps.compute_plot_limits` (PA_rot = PA - 90 deg), so the
+        emission map's orientation matches the axis limits computed
+        there for the same PA. PA=0 leaves x,y unrotated.
     zmax : float
         Maximum LOS extent [cm]
     nz : int
@@ -531,12 +538,24 @@ def los_projection_vectorized(
 
     ci, si = np.cos(inclination), np.sin(inclination)
 
+    # Rotate the sky-plane pixel grid by the position angle, before the
+    # inclination tilt below. Without this, the emission map itself was
+    # always computed as if PA=0 regardless of the actual PA -- only
+    # the plot axis limits (plot_maps.compute_plot_limits) accounted
+    # for it, which left the two inconsistent with each other. Same
+    # convention (PA_rot = PA - 90 deg) as that function, so the data
+    # and the axes agree.
+    PA_rot = np.deg2rad(PA - 90.0)
+    cPA, sPA = np.cos(PA_rot), np.sin(PA_rot)
+    x_pa = x * cPA - y * sPA
+    y_pa = x * sPA + y * cPA
+
     # LOS grid
     z = np.linspace(-zmax, zmax, nz)
     dz = z[1] - z[0]
 
-    x_flat = x.ravel()[None, :]
-    y_flat = y.ravel()[None, :]
+    x_flat = x_pa.ravel()[None, :]
+    y_flat = y_pa.ravel()[None, :]
     z_grid = z[:, None]
 
     # Rotate coordinates
