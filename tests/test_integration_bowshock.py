@@ -210,3 +210,32 @@ def test_figure2_renders_all_five_map_panels():
     x_data, y_data = app.profiles["continuum"].get_data()
     assert len(x_data) > 0
     assert np.isfinite(y_data).all()
+
+
+def test_pa_rotation_actually_rotates_the_emission_map():
+    # Regression test: PA used to be accepted by make_projection_maps
+    # but never forwarded to los_projection_vectorized, so the emission
+    # map was always computed as if PA=0 regardless of the source's
+    # actual PA -- only the plot axis limits (plot_maps.compute_plot_limits)
+    # accounted for it. A non-zero, non-special PA should now visibly
+    # change which map is produced.
+    import matplotlib
+
+    matplotlib.use("Agg")
+
+    app_pa0 = BowShock("RXJ0528+2838", convolve=False)
+    app_pa0.nx, app_pa0.ny, app_pa0.nz = 20, 20, 150
+    app_pa0.PA = 0.0
+    app_pa0.thermo_data = app_pa0.compute_thermo()
+    map_pa0 = app_pa0.compute_maps()
+
+    app_pa45 = BowShock("RXJ0528+2838", convolve=False)
+    app_pa45.nx, app_pa45.ny, app_pa45.nz = 20, 20, 150
+    app_pa45.PA = 45.0
+    app_pa45.thermo_data = app_pa45.compute_thermo()
+    map_pa45 = app_pa45.compute_maps()
+
+    # atol=0: these intensities are physically ~1e-20, far below
+    # np.allclose's default atol=1e-8, which would swamp any real
+    # difference and make every comparison trivially "close".
+    assert not np.allclose(map_pa0["I_OIII"], map_pa45["I_OIII"], atol=0, equal_nan=True)
