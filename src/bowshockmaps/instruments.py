@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from bowshockmaps.constants import c
+from bowshockmaps.spectral_bands import spec_bands
 
 # c is in cgs (cm/s); convert to m/s for use with diameters/baselines in meters.
 _C_M_S = c * 1e-2
@@ -42,6 +43,11 @@ class Telescope:
     kind: str  # "dish" or "interferometer"
     diameter_m: float = None
     configs: dict = field(default_factory=dict)
+    # Approximate range [Hz] covered by the telescope's receivers. Only
+    # used to catch nonsensical requests (e.g. a radio telescope at UV
+    # frequencies, where the diffraction formula gives a beam of 1e-6
+    # arcsec), so order-of-magnitude values are enough.
+    freq_range_hz: tuple = None
 
 
 # Approximate, publicly documented values (max baseline for
@@ -52,6 +58,7 @@ class Telescope:
 TELESCOPES = {
     "VLA": Telescope(
         kind="interferometer",
+        freq_range_hz=(5.4e7, 5.0e10),
         configs={
             "A": 36_400.0,
             "B": 11_100.0,
@@ -61,6 +68,7 @@ TELESCOPES = {
     ),
     "ALMA": Telescope(
         kind="interferometer",
+        freq_range_hz=(3.5e10, 9.5e11),
         configs={
             "C43-1": 161.0,
             "C43-2": 314.0,
@@ -76,6 +84,7 @@ TELESCOPES = {
     ),
     "ATCA": Telescope(
         kind="interferometer",
+        freq_range_hz=(1.1e9, 1.05e11),
         configs={
             "6A": 6_000.0,
             "6B": 6_000.0,
@@ -91,12 +100,16 @@ TELESCOPES = {
             "750D": 750.0,
         },
     ),
-    "GMRT": Telescope(kind="interferometer", configs={"default": 25_000.0}),
-    "MeerKAT": Telescope(kind="interferometer", configs={"default": 8_000.0}),
-    "GBT": Telescope(kind="dish", diameter_m=100.0),
-    "Effelsberg": Telescope(kind="dish", diameter_m=100.0),
-    "Parkes": Telescope(kind="dish", diameter_m=64.0),
-    "IRAM-30m": Telescope(kind="dish", diameter_m=30.0),
+    "GMRT": Telescope(
+        kind="interferometer", configs={"default": 25_000.0}, freq_range_hz=(5.0e7, 1.5e9)
+    ),
+    "MeerKAT": Telescope(
+        kind="interferometer", configs={"default": 8_000.0}, freq_range_hz=(5.8e8, 1.55e10)
+    ),
+    "GBT": Telescope(kind="dish", diameter_m=100.0, freq_range_hz=(2.9e8, 1.16e11)),
+    "Effelsberg": Telescope(kind="dish", diameter_m=100.0, freq_range_hz=(3.0e8, 9.5e10)),
+    "Parkes": Telescope(kind="dish", diameter_m=64.0, freq_range_hz=(7.0e8, 2.6e10)),
+    "IRAM-30m": Telescope(kind="dish", diameter_m=30.0, freq_range_hz=(7.3e10, 3.73e11)),
 }
 
 
@@ -105,10 +118,14 @@ def list_telescopes():
     descriptions = {}
     for name, telescope in TELESCOPES.items():
         if telescope.kind == "dish":
-            descriptions[name] = f"single dish, {telescope.diameter_m:.0f} m"
+            text = f"single dish, {telescope.diameter_m:.0f} m"
         else:
             configs = ", ".join(sorted(telescope.configs))
-            descriptions[name] = f"interferometer, configs: {configs}"
+            text = f"interferometer, configs: {configs}"
+        if telescope.freq_range_hz is not None:
+            lo, hi = telescope.freq_range_hz
+            text += f"; ~{lo/1e9:.3g}-{hi/1e9:.3g} GHz"
+        descriptions[name] = text
     return descriptions
 
 
@@ -135,8 +152,9 @@ def beam_fwhm_arcsec(telescope_name, freq_hz, config=None):
     Raises
     ------
     ValueError
-        If the telescope or configuration name is not recognized, or a
-        required configuration was not given.
+        If the telescope or configuration name is not recognized, a
+        required configuration was not given, or `freq_hz` is outside the
+        range the telescope observes in.
     """
     try:
         telescope = TELESCOPES[telescope_name]
@@ -171,5 +189,22 @@ def beam_fwhm_arcsec(telescope_name, freq_hz, config=None):
         airy_factor = 1.0
 
     wavelength_m = _C_M_S / freq_hz
+
+    if telescope.freq_range_hz is not None:
+        lo, hi = telescope.freq_range_hz
+        if not (lo <= freq_hz <= hi):
+            in_range = [b for b, info in spec_bands.items() if lo <= info["frequency"] <= hi]
+            hint = (
+                f"Predefined bands in its range: {', '.join(in_range)} (use --band)."
+                if in_range
+                else "None of the predefined bands is in its range."
+            )
+            raise ValueError(
+                f"{telescope_name} does not observe at {freq_hz:.3g} Hz "
+                f"(wavelength {wavelength_m:.3g} m): its receivers cover roughly "
+                f"{lo:.3g}-{hi:.3g} Hz, and the diffraction-limited beam is meaningless "
+                f"outside that. {hint} To give the beam directly, use --beam-fwhm."
+            )
+
     theta_rad = airy_factor * wavelength_m / D
     return np.degrees(theta_rad) * 3600.0

@@ -225,6 +225,47 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=8e3, *
     return props
 
 
+def _pixels_to_sample_beam(axis, n, vmin, vmax, distance, fwhm, f_ny, max_pixels):
+    """
+    Number of pixels along one axis needed to sample the instrumental beam.
+
+    The pixel must be no larger than ``f_ny * fwhm`` for the discrete
+    convolution to represent the beam. For a beam much finer than the map
+    that can require an unaffordable number of pixels, so the result is
+    capped at ``max_pixels`` (never below the requested ``n``). When the
+    cap binds, the beam is smaller than a pixel: convolving with it would
+    not change the map (a Gaussian much narrower than a pixel is the
+    identity on the grid), so it is effectively unresolved, and only the
+    conversion to per-beam units still applies. A warning says so.
+    """
+    d_arcsec = arcsecond((vmax - vmin) / (n - 1), distance)
+    d_required = f_ny * fwhm
+    if d_arcsec <= d_required:
+        return n
+
+    n_new = int(n * d_arcsec / d_required) + 1
+    if n_new <= max_pixels:
+        warnings.warn(
+            f"Map resolution in {axis} is too low for beam size "
+            f"(d{axis} = {d_arcsec:.2f} arcsec, required d{axis} <= {d_required:.3g} arcsec). "
+            f"Increasing n{axis}: {n} -> {n_new}."
+        )
+        return n_new
+
+    n_capped = max(n, max_pixels)
+    d_capped = d_arcsec * (n - 1) / (n_capped - 1)
+    warnings.warn(
+        f"Beam too fine for the map in {axis}: FWHM = {fwhm:.3g} arcsec would need "
+        f"d{axis} <= {d_required:.3g} arcsec, i.e. n{axis} = {n_new} pixels, more than "
+        f"max_pixels = {max_pixels}. Using n{axis} = {n_capped} "
+        f"(d{axis} = {d_capped:.3g} arcsec): the beam is smaller than a pixel, so it is "
+        f"treated as unresolved -- the map is not smoothed, only converted to per-beam "
+        f"units. To resolve it, raise max_pixels (cost grows as nx*ny*nz) or reduce the "
+        f"field of view."
+    )
+    return n_capped
+
+
 def make_projection_maps(
     xmin,
     xmax,
@@ -260,6 +301,7 @@ def make_projection_maps(
     nu_ff=2e6 * 1e9,
     distance=224.0,
     convolve=True,
+    max_pixels=1000,
 ):
     """
     Vectorized 2D projected emission maps with pre-computed properties.
@@ -315,6 +357,12 @@ def make_projection_maps(
     distance : float
         Source distance [pc]
 
+    max_pixels : int
+        Ceiling on the pixels per axis when the grid is refined to sample
+        the beam. If a beam is too fine to be sampled within it, the beam
+        is treated as unresolved (the map is not smoothed, only converted
+        to per-beam units) and a warning says so.
+
     Returns
     -------
     x_vals, y_vals : arrays
@@ -324,7 +372,7 @@ def make_projection_maps(
         I_syn_mJy, I_continuum_total (I_ff_total+I_syn_total), I_continuum_mJy
     """
 
-    logger.info(f"Beam size: {fwhm_x:.1f} arcsec")
+    logger.info(f"Beam size: {fwhm_x:.3g} arcsec")
 
     lam = 10**lmb
 
@@ -332,29 +380,21 @@ def make_projection_maps(
     # Resolution check
     # =========================
     if convolve:
-        dx_phys = (xmax - xmin) / (nx - 1)
-        dy_phys = (ymax - ymin) / (ny - 1)
+        nx = _pixels_to_sample_beam("x", nx, xmin, xmax, distance, fwhm_x, f_ny, max_pixels)
+        ny = _pixels_to_sample_beam("y", ny, ymin, ymax, distance, fwhm_y, f_ny, max_pixels)
 
-        dx_arcsec = arcsecond(dx_phys, distance)
-        dy_arcsec = arcsecond(dy_phys, distance)
-
-        if dx_arcsec > f_ny * fwhm_x:
-            nx_new = int(nx * dx_arcsec / (f_ny * fwhm_x)) + 1
-            warnings.warn(
-                f"Map resolution in x is too low for beam size "
-                f"(dx = {dx_arcsec:.2f} arcsec, required dx <= {f_ny*fwhm_x:.2f} arcsec). "
-                f"Increasing nx: {nx} -> {nx_new}."
-            )
-            nx = nx_new
-
-        if dy_arcsec > f_ny * fwhm_y:
-            ny_new = int(ny * dy_arcsec / (f_ny * fwhm_y)) + 1
-            warnings.warn(
-                f"Map resolution in y is too low for beam size "
-                f"(dy = {dy_arcsec:.2f} arcsec, required dy <= {f_ny*fwhm_y:.2f} arcsec). "
-                f"Increasing ny: {ny} -> {ny_new}."
-            )
-            ny = ny_new
+    n_samples = nx * ny * nz
+    if n_samples > 3e8:
+        logger.warning(
+            "Large map: %d x %d pixels x %d line-of-sight steps = %.1e samples; "
+            "at roughly 0.7 microseconds per sample that is about %.0f minutes on one "
+            "core (the nearest-point search uses all cores).",
+            nx,
+            ny,
+            nz,
+            n_samples,
+            0.7e-6 * n_samples / 60.0,
+        )
 
     theta_precomp = np.linspace(1e-6, theta_max, 300)
     rr_precomp = R_RS_func(theta_precomp)  # already normalized

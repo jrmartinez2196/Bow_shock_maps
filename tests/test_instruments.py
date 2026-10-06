@@ -58,3 +58,34 @@ def test_gbt_beam_matches_known_c_band_value():
     # GBT at ~5 GHz (C band) has a well-known beam of ~2.5 arcmin.
     fwhm = beam_fwhm_arcsec("GBT", 5e9)
     assert 100 < fwhm < 200  # arcsec
+
+
+def test_every_telescope_declares_a_frequency_range():
+    for name, telescope in TELESCOPES.items():
+        assert telescope.freq_range_hz is not None, name
+        lo, hi = telescope.freq_range_hz
+        assert 0 < lo < hi
+
+
+def test_radio_telescope_at_uv_frequencies_is_rejected_with_a_useful_message():
+    # FUV (2e15 Hz): a VLA gives a ~1e-6 arcsec "beam", which is meaningless.
+    with pytest.raises(ValueError) as excinfo:
+        beam_fwhm_arcsec("VLA", 2e15, "A")
+    message = str(excinfo.value)
+    assert "does not observe" in message
+    assert "radio" in message  # names a band that would work
+    assert "--beam-fwhm" in message  # and the escape hatch
+
+
+@pytest.mark.parametrize("telescope", sorted(TELESCOPES))
+def test_beam_is_available_inside_each_telescopes_own_range(telescope):
+    lo, hi = TELESCOPES[telescope].freq_range_hz
+    config = None
+    if TELESCOPES[telescope].kind == "interferometer":
+        config = sorted(TELESCOPES[telescope].configs)[0]
+    nu = (lo * hi) ** 0.5  # geometric middle of the range
+    assert beam_fwhm_arcsec(telescope, nu, config) > 0
+
+
+def test_list_telescopes_shows_the_frequency_range():
+    assert "GHz" in list_telescopes()["VLA"]

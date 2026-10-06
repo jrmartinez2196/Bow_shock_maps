@@ -148,3 +148,59 @@ def test_properties_come_from_the_foot_point_not_the_polar_angle(monkeypatch):
     assert (
         abs(mean_polar * H - theta_foot * H) > 0.05 * theta_foot * H
     )  # the test can tell them apart
+
+
+# ---------------------------------------------------------------------
+# Grid refinement to sample the instrumental beam
+# ---------------------------------------------------------------------
+
+
+def _pix(n, fwhm, max_pixels, f_ny=0.5):
+    # 1 cm == 1 arcsec at distance 206265 / pi / ... keep it simple: use
+    # arcsecond() itself on a 100-unit-wide field.
+    return maps._pixels_to_sample_beam("x", n, 0.0, 100.0, 1.0, fwhm, f_ny, max_pixels)
+
+
+def test_grid_is_left_alone_when_it_already_samples_the_beam():
+    d = maps.arcsecond(100.0 / 99, 1.0)  # pixel size [arcsec] for n=100
+    assert _pix(100, fwhm=10 * d, max_pixels=1000) == 100
+
+
+def test_grid_is_refined_to_sample_a_finer_beam():
+    d = maps.arcsecond(100.0 / 99, 1.0)
+    with pytest.warns(UserWarning, match="Increasing"):
+        n_new = _pix(100, fwhm=d / 2, max_pixels=1000)  # needs pixel <= d/4
+    assert 100 < n_new <= 1000
+    pixel = maps.arcsecond(100.0 / (n_new - 1), 1.0)
+    assert pixel <= 0.5 * (d / 2) * 1.01  # samples the beam
+
+
+def test_refinement_is_capped_and_says_the_beam_is_unresolved():
+    d = maps.arcsecond(100.0 / 99, 1.0)
+    with pytest.warns(UserWarning, match="treated as unresolved"):
+        n_new = _pix(100, fwhm=d * 1e-6, max_pixels=250)
+    assert n_new == 250
+
+
+def test_cap_never_reduces_the_requested_resolution():
+    d = maps.arcsecond(100.0 / 599, 1.0)
+    with pytest.warns(UserWarning, match="treated as unresolved"):
+        n_new = _pix(600, fwhm=d * 1e-6, max_pixels=250)
+    assert n_new == 600
+
+
+def test_a_beam_much_smaller_than_a_pixel_only_changes_the_units():
+    # This is what justifies treating a capped (unresolved) beam as "no
+    # smoothing": a Gaussian far narrower than a pixel is the identity on
+    # the grid. The only effect left is the conversion of the radio maps
+    # to per-beam units, with the true beam area.
+    rng = np.random.default_rng(0)
+    img = rng.uniform(1.0, 2.0, (30, 30))
+    axis = np.arange(30.0)  # 1 arcsec pixels
+    fwhm = 1e-4  # arcsec
+
+    out = maps.convolution({"I_Halpha": img, "I_ff_mJy": img}, axis, axis, fwhm, fwhm)
+
+    assert np.allclose(out["I_Halpha"], img, rtol=1e-12)
+    sigma = maps.fwhm_to_sigma(fwhm)
+    assert np.allclose(out["I_ff_mJy"], img * 2 * np.pi * sigma * sigma, rtol=1e-12)

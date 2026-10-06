@@ -13,6 +13,7 @@ import numpy as np
 from matplotlib.widgets import Button, Slider, TextBox
 from scipy.interpolate import interp1d
 
+from bowshockmaps.config import max_pixels as DEFAULT_MAX_PIXELS
 from bowshockmaps.config import max_theta, nx, ny, nz, zmax
 from bowshockmaps.constants import Msun_yr, kB, mp, mu
 from bowshockmaps.instruments import beam_fwhm_arcsec
@@ -115,7 +116,7 @@ class BowShock:
         self.r0_str = self.params.get("R_str")
 
         # Frequency for free-free emission [Hz]
-        self.band_name = self.params.get("spec_band", "FUV")
+        self.band_name = self._band_override or self.params.get("spec_band", "FUV")
         self.nu_ff = get_frequency(self.band_name)
 
         # Pre-compute theta grid
@@ -133,9 +134,16 @@ class BowShock:
         self.ny = ny
 
     def set_continuum_band(self, band_name):
-        """Switch the free-free continuum band and refresh figure 2 if open."""
+        """Switch the free-free continuum band and refresh figure 2 if open.
+
+        Raises ValueError (leaving the current band untouched) if the
+        telescope cannot observe in the new band.
+        """
+        nu_new = get_frequency(band_name)
+        self._check_telescope_covers(nu_new)
+
         self.band_name = band_name
-        self.nu_ff = get_frequency(band_name)
+        self.nu_ff = nu_new
 
         logger.info(f"Continuum band changed to {band_name} ({self.nu_ff:.2e} Hz)")
 
@@ -167,6 +175,8 @@ class BowShock:
         telescope=None,
         telescope_config=None,
         beam_fwhm=None,
+        band=None,
+        max_pixels=None,
     ):
         """
         Initialize bow shock model with parameters from file.
@@ -194,6 +204,22 @@ class BowShock:
             `telescope`/`telescope_config` when both are given -- use
             this if you already know the beam size (e.g. from an actual
             observation) rather than estimating it diffraction-limited.
+        band : str, optional
+            Spectral band (a key of `spectral_bands.spec_bands`) for the
+            free-free/synchrotron continuum. Overrides the source's
+            ``spec_band`` parameter. Given here, rather than changed
+            afterwards with `set_continuum_band`, so that it is already in
+            effect (and checked against `telescope`) when the first map is
+            computed.
+        max_pixels : int, optional
+            Ceiling on pixels per axis when the grid is refined to sample a
+            fine beam (default: `config.max_pixels`).
+
+        Raises
+        ------
+        ValueError
+            If `telescope` cannot observe in `band` (and no explicit
+            `beam_fwhm` is given), or `band`/`telescope` is unknown.
         """
 
         self._load_parameters(source_name, params_dir)
@@ -202,8 +228,20 @@ class BowShock:
         self.telescope = telescope
         self.telescope_config = telescope_config
         self.beam_fwhm = beam_fwhm
+        self._band_override = band
         self._initialize_model()
+        self.max_pixels = DEFAULT_MAX_PIXELS if max_pixels is None else max_pixels
+        self._check_telescope_covers(self.nu_ff)
         self._initialize_plots()
+
+    def _check_telescope_covers(self, nu_hz):
+        """Fail early, with a clear message, if the telescope cannot observe at nu_hz.
+
+        Skipped when an explicit `beam_fwhm` is given (it takes priority
+        over the telescope, which then plays no role).
+        """
+        if self.telescope is not None and self.beam_fwhm is None:
+            beam_fwhm_arcsec(self.telescope, nu_hz, self.telescope_config)
 
     def get_beam_fwhm(self, fallback_fwhm):
         """Resolve the beam FWHM [arcsec] used for convolution.
@@ -218,7 +256,7 @@ class BowShock:
         if self.telescope is not None:
             fwhm = beam_fwhm_arcsec(self.telescope, self.nu_ff, self.telescope_config)
             logger.info(
-                "Beam FWHM from %s%s at %.3g Hz: %.3f arcsec",
+                "Beam FWHM from %s%s at %.3g Hz: %.3g arcsec",
                 self.telescope,
                 f" ({self.telescope_config})" if self.telescope_config else "",
                 self.nu_ff,
@@ -477,6 +515,7 @@ class BowShock:
             f_B=self.f_B,
             R_stromgren=R_str,
             nu_ff=self.nu_ff,
+            max_pixels=self.max_pixels,
             distance=self.distance,
             convolve=convolve,
         )

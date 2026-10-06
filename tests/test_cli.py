@@ -82,3 +82,36 @@ def test_list_bands_prints_all_bands(capsys):
     captured = capsys.readouterr()
     assert "low_radio" in captured.out
     assert "Xray_hard" in captured.out
+
+
+def test_telescope_without_a_compatible_band_is_a_clean_usage_error(capsys):
+    # The default band is FUV; a VLA cannot observe there. This must exit
+    # with a usage error that says why, not crash later in the computation.
+    import sys
+
+    from bowshockmaps.cli import main
+
+    old_argv = sys.argv
+    try:
+        sys.argv = [
+            "bowshockmaps",
+            "-s",
+            "RXJ0528+2838",
+            "--telescope",
+            "VLA",
+            "--telescope-config",
+            "A",
+        ]
+        with pytest.raises(SystemExit) as excinfo:
+            main()
+    finally:
+        sys.argv = old_argv
+
+    assert excinfo.value.code == 2
+    assert "does not observe" in capsys.readouterr().err
+
+
+def test_max_pixels_flag():
+    parser = build_parser()
+    assert parser.parse_args(["--max-pixels", "300"]).max_pixels == 300
+    assert parser.parse_args([]).max_pixels is None

@@ -35,7 +35,9 @@ def test_beam_fwhm_priority_explicit_override_wins():
 
 
 def test_beam_fwhm_from_telescope_when_no_override():
-    app = BowShock("RXJ0528+2838", convolve=False, telescope="VLA", telescope_config="B")
+    app = BowShock(
+        "RXJ0528+2838", convolve=False, telescope="VLA", telescope_config="B", band="radio"
+    )
     fwhm = app.get_beam_fwhm(fallback_fwhm=999.0)
     assert 0 < fwhm < 999.0
 
@@ -212,3 +214,55 @@ def test_bd43_maps_stay_compact_and_warning_free():
         assert np.isfinite(img).all()
         for corner in (img[0, 0], img[0, -1], img[-1, 0], img[-1, -1]):
             assert corner == 0
+
+
+def test_band_given_at_construction_is_in_effect():
+    from bowshockmaps.spectral_bands import get_frequency
+
+    app = BowShock("RXJ0528+2838", convolve=False, band="radio")
+    assert app.band_name == "radio"
+    assert app.nu_ff == get_frequency("radio")
+
+
+def test_telescope_that_cannot_observe_in_the_band_fails_early_and_clearly():
+    # Regression test: `bowshockmaps -s BD+43 --telescope VLA --telescope-config A`
+    # (no --band, so the default FUV) gave a beam of ~1e-6 arcsec, which made
+    # the Nyquist refinement ask for ~3.6e9 pixels per axis and die with a
+    # 26 GiB MemoryError. A VLA does not observe at UV frequencies: say so,
+    # immediately, and say which bands would work.
+    with pytest.raises(ValueError, match="does not observe") as excinfo:
+        BowShock("RXJ0528+2838", convolve=True, telescope="VLA", telescope_config="A")
+    assert "radio" in str(excinfo.value)
+
+
+def test_explicit_beam_fwhm_skips_the_telescope_band_check():
+    # With an explicit beam the telescope plays no role, so no check.
+    app = BowShock(
+        "RXJ0528+2838", convolve=True, telescope="VLA", telescope_config="A", beam_fwhm=2.0
+    )
+    assert app.get_beam_fwhm(fallback_fwhm=999.0) == 2.0
+
+
+def test_set_continuum_band_refuses_a_band_the_telescope_cannot_observe():
+    app = BowShock(
+        "RXJ0528+2838", convolve=False, telescope="VLA", telescope_config="A", band="radio"
+    )
+    with pytest.raises(ValueError, match="does not observe"):
+        app.set_continuum_band("FUV")
+    assert app.band_name == "radio"  # unchanged
+    app.set_continuum_band("low_radio")  # a valid one still works
+    assert app.band_name == "low_radio"
+
+
+def test_very_fine_beam_does_not_blow_up_the_grid():
+    # A beam far finer than anything the grid can afford must be capped at
+    # max_pixels and treated as unresolved, not refined without bound.
+    app = BowShock("RXJ0528+2838", convolve=True, beam_fwhm=1e-4, max_pixels=40)
+    app.nx, app.ny, app.nz = 20, 20, 60
+    app.thermo_data = app.compute_thermo()
+
+    with pytest.warns(UserWarning, match="Beam too fine"):
+        maps = app.compute_maps()
+
+    assert maps["I_Halpha"].shape == (40, 40)
+    assert np.isfinite(maps["I_Halpha"]).all()

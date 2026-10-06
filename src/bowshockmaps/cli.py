@@ -93,6 +93,16 @@ Available frequencies:
         help="Beam FWHM [arcsec] to convolve with directly, overriding --telescope",
     )
     parser.add_argument(
+        "--max-pixels",
+        type=int,
+        default=None,
+        help=(
+            "Ceiling on pixels per axis when the grid is refined to sample a fine "
+            "beam (default: config.max_pixels). A beam too fine to be sampled within "
+            "it is treated as unresolved. Cost grows as nx*ny*nz."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -124,17 +134,19 @@ def main() -> None:
         return
 
     logger.info("Loading. Source: %s, params_dir: %s", args.source, args.params_dir)
-    app = BowShock(
-        args.source,
-        args.params_dir,
-        convolve=args.convolve,
-        telescope=args.telescope,
-        telescope_config=args.telescope_config,
-        beam_fwhm=args.beam_fwhm,
-    )
-
-    if args.band:
-        app.set_continuum_band(args.band)
+    try:
+        app = BowShock(
+            args.source,
+            args.params_dir,
+            convolve=args.convolve,
+            telescope=args.telescope,
+            telescope_config=args.telescope_config,
+            beam_fwhm=args.beam_fwhm,
+            band=args.band,
+            max_pixels=args.max_pixels,
+        )
+    except ValueError as e:
+        parser.error(str(e))
 
     app.run()
 

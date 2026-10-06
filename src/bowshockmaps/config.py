@@ -19,6 +19,10 @@ class GridConfig:
     nz: int = 1000
     zmax: float = 10.0  # In R0 units
     max_theta: float = np.deg2rad(120.0)
+    # Ceiling on the number of pixels per axis when the grid is refined to
+    # sample a fine instrumental beam (see maps.make_projection_maps). The
+    # cost of a map grows like nx * ny * nz.
+    max_pixels: int = 1000
 
 
 DEFAULT_GRID_CONFIG = GridConfig()
@@ -30,3 +34,4 @@ ny = DEFAULT_GRID_CONFIG.ny
 nz = DEFAULT_GRID_CONFIG.nz
 zmax = DEFAULT_GRID_CONFIG.zmax
 max_theta = DEFAULT_GRID_CONFIG.max_theta
+max_pixels = DEFAULT_GRID_CONFIG.max_pixels

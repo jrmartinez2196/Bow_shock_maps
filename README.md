@@ -36,7 +36,9 @@ bowshockmaps --source BD+43 --band FUV
 # Disable Gaussian-beam convolution
 bowshockmaps --convolve false
 
-# Set the convolution beam from a real telescope + array configuration
+# Set the convolution beam from a real telescope + array configuration.
+# Give --band too: the default band is FUV, which no radio telescope observes
+# (the program says so and exits rather than compute a meaningless beam).
 bowshockmaps --band radio --telescope VLA --telescope-config B
 
 # List available telescopes/configurations
@@ -48,6 +50,16 @@ bowshockmaps --band radio --beam-fwhm 2.5
 # Verbose (debug-level) logging
 bowshockmaps --verbose
 ```
+
+**Resolution and cost.** To convolve with a beam the map grid must sample it
+(pixel <= 0.5 FWHM), so a fine beam on a large source asks for many pixels: BD+43
+(~1500" across) with VLA-A at 3 GHz (beam 0.57") would need ~5400 pixels per side.
+The refinement is therefore capped at `--max-pixels` (default 1000,
+`config.max_pixels`). When the cap binds, the beam is smaller than a pixel, so it is
+treated as unresolved: a Gaussian that narrow does not change the map, which is only
+converted to per-beam units, and a warning says so. The cost of a map grows as
+nx*ny*nz (about 0.6 microseconds per sample per core); `--max-pixels 250` gives a
+quick look.
 
 Without `--telescope`/`--beam-fwhm`, the convolution beam falls back to
 a placeholder (the source's projected stagnation radius) -- pass one of the two
