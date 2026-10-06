@@ -31,6 +31,7 @@ def test_max_theta_is_within_valid_angle_range():
 
 
 def test_grid_config_is_overridable_without_mutating_default():
+    original_default_nx = DEFAULT_GRID_CONFIG.nx
     custom = GridConfig(nx=10, ny=10)
     assert custom.nx == 10
-    assert DEFAULT_GRID_CONFIG.nx == 50  # unaffected by the override
+    assert DEFAULT_GRID_CONFIG.nx == original_default_nx  # unaffected by the override
