@@ -78,6 +78,7 @@ src/bowshockmaps/
 │   ├── ionization.py           # ionization-fraction interpolation
 │   ├── normalization.py        # non-thermal particle normalization
 │   ├── radiation.py            # emissivities (Halpha, [OIII], free-free, sync)
+│   ├── shell_geometry.py       # layered shell in normal coordinates (foot point + distance along the normal)
 │   └── thermodynamics.py       # Adiabtatic vs radiative shocks, Rankine-Hugoniot jump conditions, cooling, advection
 └── visualization/
     ├── app.py                  # BowShock: interactive Matplotlib application

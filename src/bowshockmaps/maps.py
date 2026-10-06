@@ -20,9 +20,9 @@ from bowshockmaps.physics.radiation import (
     nu_emissivity_sync,
     precompute_gaunt_for_temperatures,
 )
+from bowshockmaps.physics.shell_geometry import ShellGeometry
 from bowshockmaps.physics.thermodynamics import (
     magnetic_field,
-    offset_boundary_along_normal,
     post_shock_conditions,
     vnorm_forward,
     vnorm_wind,
@@ -30,6 +30,10 @@ from bowshockmaps.physics.thermodynamics import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Samples of the reverse-shock curve used to locate points in normal coordinates
+# (see ShellGeometry); neighbouring samples must be much closer than a layer.
+N_ARC_SAMPLES = 3000
 
 ion_table = IonizationTable(IONIZATION_TABLE_FILE)
 
@@ -221,66 +225,6 @@ def precompute_shock_properties(theta_grid, rr_grid, R0_phys, shock, T_IL=8e3, *
     return props
 
 
-def build_layer_boundary_funcs(theta, rr, R0_phys, lam, H_RS_hot, H_RS_cold, H_FS_cold, H_FS_hot):
-    """
-    Build the four layer-boundary functions (RS hot/cold interface, CD,
-    FS cold/hot interface, FS), each as boundary(theta) -> physical
-    radius [cm], by offsetting the RS curve along its local normal
-    (see `offset_boundary_along_normal`).
-
-    The layers only exist where the RS arc that generates them exists:
-    the modeled domain is theta in [0, theta_max]. Offsetting a point
-    along the normal also pulls it back toward smaller polar angle, so
-    each boundary curve covers a somewhat narrower range of polar angle
-    than the arc it came from, and the more it is offset the narrower
-    the range. Beyond the angle a boundary reaches, that boundary (and
-    so every layer that needs it) simply does not exist, and the
-    function returns NaN there; callers must treat NaN as "no layer".
-
-    Earlier versions instead extended the input theta range beyond
-    theta_max to make the boundaries cover [0, theta_max], or held them
-    constant beyond their range. Both invent structure that is not in
-    the model: the first evaluates the shock physics where it has no
-    solution (for slow stars the normal Mach number drops below 1 and
-    there is no shock at all), the second draws a flat arc.
-
-    Parameters
-    ----------
-    theta : array
-        Polar angle grid of the RS curve [rad], covering the modeled
-        range [~0, theta_max].
-    rr : array
-        Normalized RS radius r/R0 at `theta`.
-    R0_phys : float
-        Physical standoff distance R0 [cm].
-    lam : float
-        Thermal-pressure parameter (passed to `AA` for the normal).
-    H_RS_hot, H_RS_cold, H_FS_cold, H_FS_hot : array
-        Layer thicknesses [cm] along the local normal, at `theta`.
-
-    Returns
-    -------
-    RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func : callable
-        Each maps polar angle [rad] -> radius [cm] (NaN outside the
-        range that boundary covers).
-    """
-    R_phys = rr * R0_phys
-    cumulative_offsets = [
-        H_RS_hot,
-        H_RS_hot + H_RS_cold,
-        H_RS_hot + H_RS_cold + H_FS_cold,
-        H_RS_hot + H_RS_cold + H_FS_cold + H_FS_hot,
-    ]
-
-    funcs = []
-    for H_cum in cumulative_offsets:
-        th_new, r_new = offset_boundary_along_normal(theta, rr, R_phys, H_cum, lam)
-        finite = np.isfinite(th_new) & np.isfinite(r_new)
-        th_new, r_new = th_new[finite], r_new[finite]
-        funcs.append(interp1d(th_new, r_new, bounds_error=False, fill_value=(r_new[0], np.nan)))
-    return tuple(funcs)
-
-
 def make_projection_maps(
     xmin,
     xmax,
@@ -440,25 +384,25 @@ def make_projection_maps(
     )
 
     # ==========================================================
-    # Layer-boundary curves (RS_hot_outer, CD, FS_cold_outer, FS),
-    # offset along the local shock normal instead of added directly
-    # to the radial coordinate R_RS(theta) at fixed theta -- the bow
-    # shock isn't spherically symmetric, so away from the apex those
-    # are not the same thing (see `offset_boundary_along_normal`).
-    # Each boundary only exists over the range of polar angle its curve
-    # reaches (NaN beyond it -- see `build_layer_boundary_funcs`), then
-    # reused for every pixel/LOS-step via interpolation, same as
-    # R_RS_func.
+    # Shell geometry in normal coordinates.
+    #
+    # The layer thicknesses are measured along the local normal to the
+    # shock surface, so whether a point is inside a layer -- and which
+    # part of the shock it belongs to, hence its density and temperature
+    # -- is decided from its foot point on the reverse-shock curve and its
+    # distance along the normal there, not from its polar angle (see
+    # `ShellGeometry`). The curve is sampled densely: neighbouring samples
+    # must be much closer than a layer thickness.
     # ==========================================================
-    RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func = build_layer_boundary_funcs(
-        theta_precomp,
-        rr_precomp,
+    theta_arc = np.linspace(theta_precomp[0], theta_precomp[-1], N_ARC_SAMPLES)
+    shell = ShellGeometry(
+        theta_arc,
+        R_RS_func(theta_arc),
         R0_phys,
-        lam,
-        H_RS_hot=rs_props["H_hot"](theta_precomp),
-        H_RS_cold=rs_props["H_cold"](theta_precomp),
-        H_FS_cold=fs_props["H_cold"](theta_precomp),
-        H_FS_hot=fs_props["H_hot"](theta_precomp),
+        H_RS_hot=rs_props["H_hot"](theta_arc),
+        H_RS_cold=rs_props["H_cold"](theta_arc),
+        H_FS_cold=fs_props["H_cold"](theta_arc),
+        H_FS_hot=fs_props["H_hot"](theta_arc),
     )
 
     # Generate 2D coordinate grid
@@ -474,20 +418,13 @@ def make_projection_maps(
     result = los_projection_vectorized(
         X,
         Y,
-        R_RS_func,
+        shell,
+        rs_props,
+        fs_props,
         inclination=inclination,
         zmax=zmax,
         nz=nz,
-        lmb=lmb,
-        R0_phys=R0_phys,
         R_stromgren=R_stromgren,
-        rs_props=rs_props,
-        fs_props=fs_props,
-        RS_hot_outer_func=RS_hot_outer_func,
-        CD_func=CD_func,
-        FS_cold_outer_func=FS_cold_outer_func,
-        FS_outer_func=FS_outer_func,
-        theta_bounds=(theta_precomp[0], theta_precomp[-1]),
         f_NTp=f_NTp,
         f_NTe=f_NTe,
         p_inj=p_inj,
@@ -512,20 +449,13 @@ def make_projection_maps(
 def los_projection_vectorized(
     x,
     y,
-    R_RS_func,
+    shell,
+    rs_props,
+    fs_props,
     inclination=0.0,
     zmax=5e15,
     nz=500,
-    lmb=0.0,
-    R0_phys=1.0,
     R_stromgren=3.086e17,
-    rs_props=None,
-    fs_props=None,
-    RS_hot_outer_func=None,
-    CD_func=None,
-    FS_cold_outer_func=None,
-    FS_outer_func=None,
-    theta_bounds=(1e-6, np.deg2rad(120.0)),
     f_NTp=0.1,
     f_NTe=0.01,
     p_inj=2.5,
@@ -533,44 +463,41 @@ def los_projection_vectorized(
     nu_ff=2e6 * 1e9,
 ):
     """
-    Vectorized LOS projection along z-axis for an inclined shell.
+    Line-of-sight projection of the emission of an inclined bow-shock shell.
 
     Correctly handles both adiabatic and radiative regimes:
     - Adiabatic: only hot layer (H_cold = 0, but n_rec/T_rec = n_post/T_post)
     - Radiative: hot layer + cold recombination layer
 
-    Radial structure from star outward:
+    Layers, from the star outward, measured along the local normal to the
+    shock surface:
     Star -> Wind -> [RS] -> Hot_RS -> Cold_RS -> [CD] -> Cold_FS -> Hot_FS -> [FS] -> ISM
                                 (if rad)    (if rad)    (if rad)    (if rad)
+
+    Each line-of-sight sample is located in normal coordinates (see
+    `ShellGeometry`): its foot point on the reverse-shock curve decides
+    which layer it is in (from its signed distance along the normal) and
+    supplies that layer's density, temperature and magnetic field, i.e.
+    those of the part of the shock that generated it.
 
     Parameters
     ----------
     x, y : 2D arrays
-        Coordinate grids [cm]
-    R_RS_func : callable
-        Function R_RS(theta) giving reverse shock radius [cm]
+        Sky-plane coordinate grids [cm], in the intrinsic frame (the
+        position angle is applied at display time, not here).
+    shell : ShellGeometry
+        Reverse-shock curve with the cumulative thickness of the layers.
+    rs_props, fs_props : dict
+        Shock properties from precompute_shock_properties, as
+        interpolators of the angle along the shock (``shell.theta``).
     inclination : float
         Inclination angle [rad]
     zmax : float
         Maximum LOS extent [cm]
     nz : int
         Number of LOS integration steps
-    lmb : float
-        log10(lambda) parameter
-    R0_phys : float
-        Physical standoff radius [cm]
     R_stromgren : float
         Stromgren radius [cm]
-    rs_props, fs_props : dict
-        Precomputed shock properties from precompute_shock_properties
-    RS_hot_outer_func, CD_func, FS_cold_outer_func, FS_outer_func : callable
-        boundary(theta) -> physical radius [cm] for each layer boundary
-        (RS hot/cold interface, contact discontinuity, FS cold/hot
-        interface, forward shock), built by offsetting the RS curve
-        along its local normal (see `offset_boundary_along_normal`)
-        rather than added directly to R_RS(theta) at fixed theta. They
-        return NaN where that boundary does not exist, which means "no
-        layer there".
     nu_ff : float
         Frequency for free-free emission [Hz]
 
@@ -598,23 +525,8 @@ def los_projection_vectorized(
     z = np.linspace(-zmax, zmax, nz)
     dz = z[1] - z[0]
 
-    x_flat = x.ravel()[None, :]
-    y_flat = y.ravel()[None, :]
-    z_grid = z[:, None]
-
-    # Rotate coordinates
-    X = ci * x_flat + si * z_grid
-    Y = y_flat
-    Z = -si * x_flat + ci * z_grid
-
-    # Spherical coordinates
-    r = np.sqrt(X**2 + Y**2 + Z**2)
-    theta = np.arccos(np.clip(Z / np.where(r == 0, 1, r), -1, 1))
-    theta_flat = theta.ravel()
-    theta_flat = np.clip(theta_flat, theta_bounds[0], theta_bounds[1])
-
-    # Reverse shock radius
-    R_RS = R_RS_func(theta) * R0_phys
+    x_flat = x.ravel()
+    y_flat = y.ravel()
 
     shape_2d = y.shape
     n_pixels = shape_2d[0] * shape_2d[1]
@@ -628,36 +540,29 @@ def los_projection_vectorized(
     I_syn_mJy = np.zeros(n_pixels)
 
     # =========================
-    # RS PROPERTIES
+    # Shock properties, tabulated along the shell. Entry j belongs to the
+    # part of the shock at shell.theta[j]; a line-of-sight sample takes
+    # the entry of its foot point.
+    theta_tab = shell.theta
 
-    H_RS_cold = rs_props["H_cold"](theta_flat).reshape(theta.shape)
+    n_post_RS = rs_props["n_post"](theta_tab)
+    T_post_RS = rs_props["T_post"](theta_tab)
+    P_post_RS = rs_props["P_post"](theta_tab)
+    n_IL_RS = rs_props["n_IL"](theta_tab)
+    T_IL_RS = rs_props["T_IL_arr"](theta_tab)
+    regime_RS = rs_props["regime"](theta_tab)
 
-    n_post_RS = rs_props["n_post"](theta_flat).reshape(theta.shape)
-    T_post_RS = rs_props["T_post"](theta_flat).reshape(theta.shape)
-    P_post_RS = rs_props["P_post"](theta_flat).reshape(theta.shape)
-
-    n_IL_RS = rs_props["n_IL"](theta_flat).reshape(theta.shape)
-    T_IL_RS = rs_props["T_IL_arr"](theta_flat).reshape(theta.shape)
-
-    # =========================
-    # FS PROPERTIES
-
-    H_FS_cold = fs_props["H_cold"](theta_flat).reshape(theta.shape)
-
-    n_post_FS = fs_props["n_post"](theta_flat).reshape(theta.shape)
-    T_post_FS = fs_props["T_post"](theta_flat).reshape(theta.shape)
-    P_post_FS = fs_props["P_post"](theta_flat).reshape(theta.shape)
-
-    n_IL_FS = fs_props["n_IL"](theta_flat).reshape(theta.shape)
-    T_IL_FS = fs_props["T_IL_arr"](theta_flat).reshape(theta.shape)
+    n_post_FS = fs_props["n_post"](theta_tab)
+    T_post_FS = fs_props["T_post"](theta_tab)
+    P_post_FS = fs_props["P_post"](theta_tab)
+    n_IL_FS = fs_props["n_IL"](theta_tab)
+    T_IL_FS = fs_props["T_IL_arr"](theta_tab)
+    regime_FS = fs_props["regime"](theta_tab)
 
     # =========================
     # Non-thermal distributions normalizatoins
     U_Th_RS = P_post_RS / (gamma_ad - 1.0)
     U_Th_FS = P_post_FS / (gamma_ad - 1.0)
-
-    regime_RS = rs_props["regime"](theta_flat).reshape(theta.shape)
-    regime_FS = fs_props["regime"](theta_flat).reshape(theta.shape)
 
     U_NTp_RS = np.where(regime_RS == 0.0, f_NTp * U_Th_RS, 0.0)
     U_NTp_FS = np.where(regime_FS == 0.0, f_NTp * U_Th_FS, 0.0)
@@ -666,10 +571,16 @@ def los_projection_vectorized(
     U_NTe_FS = np.where(regime_FS == 0.0, f_NTe * U_Th_FS, 0.0)
 
     # NT distribution normalization used for NT emission
-    k0p_RS = k0_p(U_NTp_RS, p_inj=p_inj, Eminp=1e9 * eV)
+    # Proton normalization (k0p_RS/k0p_FS) is computed alongside the
+    # electron one but not yet consumed downstream: protons don't
+    # contribute meaningfully to synchrotron emission (radiative losses
+    # scale as 1/mass^2), so nothing here uses it today. Kept
+    # intentionally for a future hadronic-emission channel (e.g.
+    # pion-decay gamma-rays) rather than removed.
+    k0p_RS = k0_p(U_NTp_RS, p_inj=p_inj, Eminp=1e9 * eV)  # noqa: F841
     k0e_RS = k0_e(U_NTe_RS, p_inj=p_inj, Emine=1e6 * eV)
 
-    k0p_FS = k0_p(U_NTp_FS, p_inj=p_inj, Eminp=1e9 * eV)
+    k0p_FS = k0_p(U_NTp_FS, p_inj=p_inj, Eminp=1e9 * eV)  # noqa: F841
     k0e_FS = k0_e(U_NTe_FS, p_inj=p_inj, Emine=1e6 * eV)
 
     # =========================
@@ -680,250 +591,86 @@ def los_projection_vectorized(
     B_RS, B_RS_avg = magnetic_field(U_B_RS)
     B_FS, B_FS_avg = magnetic_field(U_B_FS)
 
-    theta_apex = np.array([theta_bounds[0]])
-    U_B_RS_apex = f_B * rs_props["P_post"](theta_apex) / (gamma_ad - 1.0)
-    U_B_FS_apex = f_B * fs_props["P_post"](theta_apex) / (gamma_ad - 1.0)
-
-    B_RS_apex, _ = magnetic_field(U_B_RS_apex)
-    B_FS_apex, _ = magnetic_field(U_B_FS_apex)
+    # Field at the apex (first sample of the curve)
+    B_RS_apex, _ = magnetic_field(U_B_RS[:1])
+    B_FS_apex, _ = magnetic_field(U_B_FS[:1])
 
     logger.info(f"Apex magnetic field: B_RS = {B_RS_apex[0]*1e6:.1f} muG")
     logger.info(f"Apex magnetic field: B_FS = {B_FS_apex[0]*1e6:.1f} muG")
 
-    # =========================
-    # Layer boundary positions.
-    #
-    # These are NOT simply R_RS + (cumulative thickness) at fixed
-    # theta: the bow shock isn't spherically symmetric, so a thickness
-    # measured along the local shock normal only maps onto a radial
-    # distance that way at the apex. RS_hot_outer_func/CD_func/
-    # FS_cold_outer_func/FS_outer_func already account for this (see
-    # offset_boundary_along_normal / make_projection_maps).
-    RS_hot_outer = RS_hot_outer_func(theta_flat).reshape(theta.shape)
-    CD_pos = CD_func(theta_flat).reshape(theta.shape)
-    FS_cold_outer = FS_cold_outer_func(theta_flat).reshape(theta.shape)
-    FS_pos = FS_outer_func(theta_flat).reshape(theta.shape)
+    def add_layer(pix, n, T, r_pt, k0e=None, B_avg=None):
+        """Add one slice's emission of the samples `pix` (pixel indices,
+        unique within a slice) that lie in a layer with density `n` and
+        temperature `T` (arrays aligned with `pix`). Synchrotron only
+        where a non-thermal electron population `k0e`, `B_avg` is given
+        (the hot layers)."""
+        # Ionization fractions: full ionization inside the Stromgren
+        # sphere, CIE at the layer temperature outside it.
+        ion_H = np.ones_like(r_pt)
+        ion_O = np.ones_like(r_pt)
+        outside_stromgren = r_pt > R_stromgren
+        if np.any(outside_stromgren):
+            ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(
+                T[outside_stromgren]
+            )
 
-    # Each boundary is built from an independent offset-and-reparametrize
-    # pass (see offset_boundary_along_normal), so near-degenerate regions
-    # (e.g. theta ~ 0, where the local normal direction itself is
-    # ill-defined, or where a layer's thickness ~ 0 and two boundaries
-    # should nearly coincide) can leave tiny numerical crossings. The
-    # physical layers are strictly nested by construction (each boundary
-    # is always farther from the star than the previous one), so enforce
-    # that explicitly rather than let interpolation noise violate it.
-    #
-    # np.maximum propagates NaN, which is what we want: a boundary that
-    # does not exist (NaN, see build_layer_boundary_funcs) makes every
-    # boundary outside it nonexistent too -- an outer layer cannot exist
-    # without the inner ones.
-    RS_hot_outer = np.maximum(RS_hot_outer, R_RS)
-    CD_pos = np.maximum(CD_pos, RS_hot_outer)
-    FS_cold_outer = np.maximum(FS_cold_outer, CD_pos)
-    FS_pos = np.maximum(FS_pos, FS_cold_outer)
+        I_Halpha[pix] += emissivity_Halpha(n, T, ion_H=ion_H) * dz
+        I_OIII[pix] += emissivity_OIII(n, T, ion_H=ion_H, ion_O=ion_O) * dz
 
-    # A layer exists only where both of its boundaries do. Record that
-    # explicitly (and replace NaN by a finite value) so the masks below
-    # never compare against NaN.
-    ok_rs_hot = np.isfinite(RS_hot_outer)
-    ok_cd = np.isfinite(CD_pos)
-    ok_fs_cold = np.isfinite(FS_cold_outer)
-    ok_fs = np.isfinite(FS_pos)
-    RS_hot_outer = np.where(ok_rs_hot, RS_hot_outer, 0.0)
-    CD_pos = np.where(ok_cd, CD_pos, 0.0)
-    FS_cold_outer = np.where(ok_fs_cold, FS_cold_outer, 0.0)
-    FS_pos = np.where(ok_fs, FS_pos, 0.0)
+        j_ff, j_ff_mJy = nu_emissivity_freefree(
+            n,
+            T,
+            ion_H=ion_H,
+            Z_q=Z_q,
+            nu=nu_ff,
+            gaunt_lookup=gaunt_lookup,
+        )
+        I_ff_total[pix] += j_ff * dz
+        I_ff_mJy[pix] += j_ff_mJy * dz
+
+        if k0e is not None:
+            j_syn, j_syn_mJy = nu_emissivity_sync(k0e, B_avg, p_inj, nu_ff)
+            I_syn_total[pix] += j_syn * dz
+            I_syn_mJy[pix] += j_syn_mJy * dz
 
     # =========================
     # LOS INTEGRATION
 
     for i in range(nz):
 
-        r_i = r[i, :]
+        # Rotate coordinates: cylindrical radius and height along the
+        # symmetry axis of every pixel's sample at this depth
+        X_i = ci * x_flat + si * z[i]
+        Z_i = -si * x_flat + ci * z[i]
+        rho_i = np.hypot(X_i, y_flat)
 
-        outside_stromgren = r_i > R_stromgren  # Partial ionization
+        idx, d, valid = shell.locate(rho_i, Z_i)
+        rs_hot, rs_cold, fs_cold, fs_hot = shell.layers(idx, d, valid)
 
-        R_RS_i = R_RS[i, :]
-        RS_hot_outer_i = RS_hot_outer[i, :]
-        CD_pos_i = CD_pos[i, :]
-        FS_cold_outer_i = FS_cold_outer[i, :]
-        FS_pos_i = FS_pos[i, :]
+        if not (rs_hot.any() or rs_cold.any() or fs_cold.any() or fs_hot.any()):
+            continue
 
-        # ==========================================================
-        # RS - Hot post shock layer
-        # ==========================================================
+        r_i = np.hypot(rho_i, Z_i)  # distance from the star
 
-        inside_hot_rs = (
-            (r_i >= R_RS_i)
-            & (r_i <= RS_hot_outer_i)
-            & ok_rs_hot[i, :]
-            & (theta[i, :] <= theta_bounds[1])
-        )
+        # RS - hot post shock layer
+        pix = np.flatnonzero(rs_hot)
+        j = idx[pix]
+        add_layer(pix, n_post_RS[j], T_post_RS[j], r_i[pix], k0e_RS[j], B_RS_avg[j])
 
-        ion_H = np.ones_like(
-            r_i
-        )  # Ionization fractions; initialize assuming full ionization as inside the Stromgren sphere
-        ion_O = np.ones_like(r_i)
+        # RS - cold post cooling layer
+        pix = np.flatnonzero(rs_cold)
+        j = idx[pix]
+        add_layer(pix, n_IL_RS[j], T_IL_RS[j], r_i[pix])
 
-        # Compute only for positions r_i > R_str
-        ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(
-            T_post_RS[i, outside_stromgren]
-        )  # In terms of the temperature considering CIE if outside R_str
+        # FS - cold post cooling layer
+        pix = np.flatnonzero(fs_cold)
+        j = idx[pix]
+        add_layer(pix, n_IL_FS[j], T_IL_FS[j], r_i[pix])
 
-        I_Halpha += (
-            emissivity_Halpha(n_post_RS[i, :], T_post_RS[i, :], ion_H=ion_H) * inside_hot_rs * dz
-        )
-
-        I_OIII += (
-            emissivity_OIII(n_post_RS[i, :], T_post_RS[i, :], ion_H=ion_H, ion_O=ion_O)
-            * inside_hot_rs
-            * dz
-        )
-
-        j_ff, j_ff_mJy = nu_emissivity_freefree(
-            n_post_RS[i, :],
-            T_post_RS[i, :],
-            ion_H=ion_H,
-            Z_q=Z_q,
-            nu=nu_ff,
-            gaunt_lookup=gaunt_lookup,
-        )
-
-        j_syn, j_syn_mJy = nu_emissivity_sync(k0e_RS[i, :], B_RS_avg[i, :], p_inj, nu_ff)
-
-        I_ff_total += j_ff * inside_hot_rs * dz
-        I_ff_mJy += j_ff_mJy * inside_hot_rs * dz
-
-        I_syn_total += j_syn * inside_hot_rs * dz
-        I_syn_mJy += j_syn_mJy * inside_hot_rs * dz
-
-        # ==========================================================
-        # RS - cold post cooling layer (T_IL might be different????)
-        # ==========================================================
-
-        if np.any(H_RS_cold[i, :] > 0):
-
-            inside_cold_rs = (
-                (r_i >= RS_hot_outer_i)
-                & (r_i <= CD_pos_i)
-                & ok_cd[i, :]
-                & (H_RS_cold[i, :] > 0)
-                & (theta[i, :] <= theta_bounds[1])
-            )
-
-            ion_H = np.ones_like(r_i)
-            ion_O = np.ones_like(r_i)
-
-            ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(
-                T_IL_RS[i, outside_stromgren]
-            )
-            I_Halpha += (
-                emissivity_Halpha(n_IL_RS[i, :], T_IL_RS[i, :], ion_H=ion_H) * inside_cold_rs * dz
-            )
-            I_OIII += (
-                emissivity_OIII(n_IL_RS[i, :], T_IL_RS[i, :], ion_H=ion_H, ion_O=ion_O)
-                * inside_cold_rs
-                * dz
-            )
-
-            j_ff, j_ff_mJy = nu_emissivity_freefree(
-                n_IL_RS[i, :],
-                T_IL_RS[i, :],
-                ion_H=ion_H,
-                Z_q=Z_q,
-                nu=nu_ff,
-                gaunt_lookup=gaunt_lookup,
-            )
-
-            I_ff_total += j_ff * inside_cold_rs * dz
-            I_ff_mJy += j_ff_mJy * inside_cold_rs * dz
-
-        # ==========================================================
-        # FORWARD SHOCK - cold post cooling layer (T_IL might be T_ISM if outside R_str????)
-        # ==========================================================
-
-        if np.any(H_FS_cold[i, :] > 0):
-
-            inside_cold_fs = (
-                (r_i >= CD_pos_i)
-                & (r_i <= FS_cold_outer_i)
-                & ok_fs_cold[i, :]
-                & (H_FS_cold[i, :] > 0)
-                & (theta[i, :] <= theta_bounds[1])
-            )
-
-            ion_H = np.ones_like(r_i)
-            ion_O = np.ones_like(r_i)
-
-            ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(
-                T_IL_FS[i, outside_stromgren]
-            )
-
-            I_Halpha += (
-                emissivity_Halpha(n_IL_FS[i, :], T_IL_FS[i, :], ion_H=ion_H) * inside_cold_fs * dz
-            )
-
-            I_OIII += (
-                emissivity_OIII(n_IL_FS[i, :], T_IL_FS[i, :], ion_H=ion_H, ion_O=ion_O)
-                * inside_cold_fs
-                * dz
-            )
-
-            j_ff, j_ff_mJy = nu_emissivity_freefree(
-                n_IL_FS[i, :],
-                T_IL_FS[i, :],
-                ion_H=ion_H,
-                Z_q=Z_q,
-                nu=nu_ff,
-                gaunt_lookup=gaunt_lookup,
-            )
-
-            I_ff_total += j_ff * inside_cold_fs * dz
-            I_ff_mJy += j_ff_mJy * inside_cold_fs * dz
-
-        # ==========================================================
-        # FS - Hot post shock layer
-        # ==========================================================
-
-        hot_start = FS_cold_outer_i
-
-        inside_hot_fs = (
-            (r_i >= hot_start) & (r_i <= FS_pos_i) & ok_fs[i, :] & (theta[i, :] <= theta_bounds[1])
-        )
-
-        ion_H = np.ones_like(r_i)
-        ion_O = np.ones_like(r_i)
-
-        ion_H[outside_stromgren], ion_O[outside_stromgren] = ionization_fraction(
-            T_post_FS[i, outside_stromgren]
-        )
-
-        I_Halpha += (
-            emissivity_Halpha(n_post_FS[i, :], T_post_FS[i, :], ion_H=ion_H) * inside_hot_fs * dz
-        )
-
-        I_OIII += (
-            emissivity_OIII(n_post_FS[i, :], T_post_FS[i, :], ion_H=ion_H, ion_O=ion_O)
-            * inside_hot_fs
-            * dz
-        )
-
-        j_ff, j_ff_mJy = nu_emissivity_freefree(
-            n_post_FS[i, :],
-            T_post_FS[i, :],
-            ion_H=ion_H,
-            Z_q=Z_q,
-            nu=nu_ff,
-            gaunt_lookup=gaunt_lookup,
-        )
-
-        I_ff_total += j_ff * inside_hot_fs * dz
-        I_ff_mJy += j_ff_mJy * inside_hot_fs * dz
-
-        j_syn, j_syn_mJy = nu_emissivity_sync(k0e_FS[i, :], B_FS_avg[i, :], p_inj, nu_ff)
-
-        I_syn_total += j_syn * inside_hot_fs * dz
-        I_syn_mJy += j_syn_mJy * inside_hot_fs * dz
+        # FS - hot post shock layer
+        pix = np.flatnonzero(fs_hot)
+        j = idx[pix]
+        add_layer(pix, n_post_FS[j], T_post_FS[j], r_i[pix], k0e_FS[j], B_FS_avg[j])
 
     # =========================
     # RESHAPE

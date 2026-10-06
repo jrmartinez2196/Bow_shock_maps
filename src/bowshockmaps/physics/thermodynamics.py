@@ -39,66 +39,6 @@ def AA(thr, rr, lam=0.0):
     return Aomega, Az
 
 
-def offset_boundary_along_normal(theta, rr, R_base_phys, H_cumulative, lam=0.0):
-    """
-    Offset a theta-parametrized bow-shock curve along its local normal.
-
-    The bow shock is not spherically symmetric, so a layer thickness
-    (e.g. a post-shock hot or cold layer) computed along the local
-    shock-normal direction does NOT simply add to the *radial* distance
-    R_base_phys(theta) at the same theta -- that would only be exact at
-    the apex (theta=0), where the normal and radial directions coincide.
-    Away from the apex, displacing a point by H along the normal also
-    shifts it tangentially (in theta), which can be a large effect once
-    H is a non-negligible fraction of R_base_phys.
-
-    This offsets each point of the base curve (theta, R_base_phys) by
-    the physical distance H_cumulative along the local outward normal
-    n_perp = -Az*e_omega + Aomega*e_z (see `AA`), and returns the
-    resulting curve's own (theta, r) samples -- generally on a
-    *different* theta grid than the input, since the offset is what
-    reshapes the curve. The returned theta grid is sorted (and may not
-    reach as far as the input theta range: a large offset can pull the
-    curve back in theta for a while before increasing it again), so
-    that the result can be fed directly to `scipy.interpolate.interp1d`
-    to build a boundary_func(theta) with the same interface as
-    R_RS_func.
-
-    Parameters
-    ----------
-    theta : array
-        Polar angle grid of the base curve [rad].
-    rr : array
-        Normalized radius r/R0 of the base curve at `theta` (passed to
-        `AA` to get the local normal direction).
-    R_base_phys : array
-        Physical radius [cm] of the base curve at `theta`.
-    H_cumulative : array
-        Physical distance [cm] to displace along the local outward
-        normal at each `theta` (e.g. H_hot, or H_hot + H_cold for a
-        boundary further out).
-    lam : float
-        Thermal-pressure parameter (passed to `AA`).
-
-    Returns
-    -------
-    theta_new : array
-        Sorted polar angle [rad] of the offset curve.
-    r_new : array
-        Physical radius [cm] of the offset curve at `theta_new`.
-    """
-    Aomega, Az = AA(theta, rr, lam)
-
-    rho = R_base_phys * np.sin(theta) - Az * H_cumulative
-    z = R_base_phys * np.cos(theta) + Aomega * H_cumulative
-
-    r_new = np.sqrt(rho**2 + z**2)
-    theta_new = np.arctan2(rho, z)
-
-    order = np.argsort(theta_new)
-    return theta_new[order], r_new[order]
-
-
 # ============================================================
 # dL_dAperp function
 # ============================================================
