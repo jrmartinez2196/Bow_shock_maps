@@ -61,12 +61,10 @@ def get_norm(data):
     return LogNorm(vmin=vmin, vmax=1.1 * vmax)
 
 
-def compute_R0_position(inclination, distance, R0_corrected):
+def compute_R0_position(inclination, distance, R0_corrected, PA=0.0):
     """
-    Compute the projected position of the apex on the sky.
-
-    Calculated from stellar position
-    and rotated according to the inclination and position angle.
+    Compute the projected position of the apex on the sky, relative to
+    the star.
 
     Parameters:
     -----------
@@ -77,6 +75,11 @@ def compute_R0_position(inclination, distance, R0_corrected):
         Source distance [pc]
     R0_corrected : float
         RS distance at the apex including thermal pressure [cm].
+    PA : float
+        Position angle [deg], measured clockwise from North (+y axis,
+        up), with East at PA=90 deg (+x axis, right) -- same
+        convention as `compute_plot_limits` and
+        `maps.los_projection_vectorized`.
 
     Returns:
     --------
@@ -84,10 +87,14 @@ def compute_R0_position(inclination, distance, R0_corrected):
         Dictionary containing the stellar coordinates
     """
     inc = np.deg2rad(inclination)
+    PA_rad = np.deg2rad(PA)
 
-    x_R0 = -arcsecond(R0_corrected * np.cos(inc), distance)
+    # Projected apex distance from the star (foreshortened by
+    # inclination); its direction on the sky is set by PA.
+    R0_proj = arcsecond(R0_corrected * np.cos(inc), distance)
 
-    y_R0 = 0.0
+    x_R0 = R0_proj * np.sin(PA_rad)
+    y_R0 = R0_proj * np.cos(PA_rad)
 
     return {"x_R0": x_R0, "y_R0": y_R0}
 
@@ -109,7 +116,7 @@ def compute_plot_limits(extent, PA):
 
     xmin, xmax, ymin, ymax = extent
 
-    PA_rot = np.deg2rad(PA - 90.0)
+    PA_rot = np.deg2rad(PA + 90.0)
 
     corners = np.array([[xmin, ymin], [xmin, ymax], [xmax, ymin], [xmax, ymax]])
 

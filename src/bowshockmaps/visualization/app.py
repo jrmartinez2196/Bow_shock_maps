@@ -885,6 +885,7 @@ class BowShock:
                 inclination=self.inclination,
                 distance=self.distance,
                 R0_corrected=R0_corrected,
+                PA=self.PA,
             )
 
             limits = compute_plot_limits(extent, self.PA)

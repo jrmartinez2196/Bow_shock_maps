@@ -212,6 +212,32 @@ def test_figure2_renders_all_five_map_panels():
     assert np.isfinite(y_data).all()
 
 
+def test_pa_convention_is_clockwise_from_north():
+    # Regression test: PA is the standard astronomical convention --
+    # measured clockwise from North (+y, up), with East at PA=90 deg
+    # (+x, right). PA=0 should put the apex due north of the star
+    # (x=0, y>0); PA=90 due east (x>0, y=0); PA=270 due west (x<0,
+    # y=0). The earlier (buggy) PA_rot = PA - 90 convention put things
+    # a half-turn (180 deg) off from this.
+    from bowshockmaps.visualization.plot_maps import compute_R0_position
+
+    R0_corrected = 1e17  # arbitrary, only the direction matters here
+    distance = 500.0
+    inclination = 30.0  # not edge-on, so there's a nonzero projected offset
+
+    pos_0 = compute_R0_position(inclination, distance, R0_corrected, PA=0.0)
+    assert pos_0["y_R0"] > 0
+    assert abs(pos_0["x_R0"]) < 1e-6 * abs(pos_0["y_R0"])
+
+    pos_90 = compute_R0_position(inclination, distance, R0_corrected, PA=90.0)
+    assert pos_90["x_R0"] > 0
+    assert abs(pos_90["y_R0"]) < 1e-6 * abs(pos_90["x_R0"])
+
+    pos_270 = compute_R0_position(inclination, distance, R0_corrected, PA=270.0)
+    assert pos_270["x_R0"] < 0
+    assert abs(pos_270["y_R0"]) < 1e-6 * abs(pos_270["x_R0"])
+
+
 def test_pa_rotation_actually_rotates_the_emission_map():
     # Regression test: PA used to be accepted by make_projection_maps
     # but never forwarded to los_projection_vectorized, so the emission

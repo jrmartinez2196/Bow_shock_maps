@@ -668,10 +668,12 @@ def los_projection_vectorized(
     inclination : float
         Inclination angle [rad]
     PA : float
-        Position angle [deg], measured the same way as
-        `plot_maps.compute_plot_limits` (PA_rot = PA - 90 deg), so the
+        Position angle [deg], measured clockwise from North (+y axis,
+        up), with East at PA=90 deg (+x axis, right) -- standard
+        astronomical convention. Same convention and PA_rot = PA + 90
+        deg formula as `plot_maps.compute_plot_limits`, so the
         emission map's orientation matches the axis limits computed
-        there for the same PA. PA=0 leaves x,y unrotated.
+        there for the same PA.
     zmax : float
         Maximum LOS extent [cm]
     nz : int
@@ -713,7 +715,7 @@ def los_projection_vectorized(
     # for it, which left the two inconsistent with each other. Same
     # convention (PA_rot = PA - 90 deg) as that function, so the data
     # and the axes agree.
-    PA_rot = np.deg2rad(PA - 90.0)
+    PA_rot = np.deg2rad(PA + 90.0)
     cPA, sPA = np.cos(PA_rot), np.sin(PA_rot)
     x_pa = x * cPA - y * sPA
     y_pa = x * sPA + y * cPA
