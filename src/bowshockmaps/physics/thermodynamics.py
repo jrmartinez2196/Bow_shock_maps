@@ -436,7 +436,8 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
         Post-shock thermal cooling timescale
     t_adv : ndarray
         Advection timescale, R_phys / v_tan (tangential velocity; regime-
-        independent, used to classify each angle as radiative/adiabatic).
+        independent). An angle is radiative if t_cool < t_adv and the cooling
+        layer fits in the shocked layer (non-negative cold layer thickness).
     """
 
     R_phys = rr * R0_phys
@@ -524,9 +525,6 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     v_adv = vadv(thr, rr, R0_phys, v_perp, comp, t_cool, v_pre, P_adi, rho_adi[0])
     t_adv = R_phys / v_t
 
-    # Radiative regime if cooling time < advection time
-    is_radiative = t_cool < t_adv
-
     # Geometric factor for mass accumulation
     sin_alpha = v_perp / v_pre
     sin_alpha = np.clip(sin_alpha, 1e-10, 1.0)
@@ -535,6 +533,32 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     _, dA_perp = dL_dAperp(R_phys, thr, sin_alpha)
     dM = rho_pre * v_pre * dA_perp
     dot_M = np.cumsum(dM)
+
+    # Layer thicknesses if the shock is radiative.
+    #
+    # Hot layer: the cooling length. Cold layer: from mass conservation, what
+    # the accumulated mass leaves once the hot layer has taken its share. v_t
+    # (not v_adv) is the physically appropriate flow speed for the cold layer:
+    # v_adv assumes adiabatic (energy-conserving) flow, which no longer holds
+    # once the gas has radiated energy away.
+    rho_cold_rad = n_RH * (T_RH / T_IL) * mu_sh * mp
+    H_hot_rad = (v_perp / comp) * t_cool
+    denominator_rad = 2.0 * np.pi * R_phys * np.sin(thr) * v_t * rho_cold_rad
+    with np.errstate(divide="ignore", invalid="ignore"):
+        H_cold_rad = dot_M / denominator_rad - H_hot_rad * (rho_RH / rho_cold_rad)
+
+    # Radiative regime if the cooling time is shorter than the advection time
+    # AND the cooling layer fits in the shocked layer.
+    #
+    # The second condition is what makes the radiative solution self-consistent:
+    # if the cooling length holds more mass than has been accumulated, the cold
+    # layer would have negative thickness. That means the gas does not cool
+    # within its layer, i.e. the shock is adiabatic there. The time criterion
+    # alone cannot see this: near the symmetry axis v_tan -> 0, so
+    # t_adv = R/v_tan -> infinity and t_cool < t_adv is always satisfied, even
+    # when the cooling length exceeds the radius (H_hot/R ~ 1 and H_cold < 0 for
+    # V_wind = 100 km/s, RXJ0528+2838 parameters).
+    is_radiative = (t_cool < t_adv) & np.isfinite(H_cold_rad) & (H_cold_rad >= 0.0)
 
     # Initialize outputs
     n_post = np.zeros(n_points)
@@ -591,20 +615,10 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
             n_rec[i] = n_RH[i] * (T_RH[i] / T_IL)
             T_rec[i] = T_IL
 
-            # Hot layer thickness: cooling layer (post-shock)
-            H_hot[i] = (v_perp[i] / comp[i]) * t_cool[i]
-            # H_hot[i] = max(H_hot[i], 0.0)
-
-            # Cold layer thickness from mass conservation.
-            # v_t (not v_adv) is the physically appropriate flow speed
-            # here: v_adv assumes adiabatic (energy-conserving) flow,
-            # which no longer holds once the gas has radiated energy away.
-            rho_cold = n_rec[i] * mu_sh * mp
-            denominator = 2.0 * np.pi * R_phys[i] * np.sin(thr[i]) * v_t[i] * rho_cold
-
-            if denominator > 0 and i > 0:
-                H_cold[i] = dot_M[i] / denominator - H_hot[i] * (rho_RH[i] / rho_cold)
-            # H_cold[i] = max(H_cold[i], 0.0)
+            # Hot layer: cooling layer (post-shock); cold layer: from mass
+            # conservation (see above; non-negative by construction here).
+            H_hot[i] = H_hot_rad[i]
+            H_cold[i] = H_cold_rad[i]
 
         else:
             # Adiabatic: only hot layer, cold layer = hot layer (no recombination)

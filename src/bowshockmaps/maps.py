@@ -464,13 +464,22 @@ def make_projection_maps(
             v if v is not None else a for v, a in zip((xmin, xmax, ymin, ymax), auto_limits)
         )
         if not any(fov_given):
-            # Square pixels: max(nx, ny) pixels along the longer side
+            # Exactly square pixels: max(nx, ny) pixels along the longer side
+            # and, along the other, as many as fit, widening that side by less
+            # than a pixel (never narrowing it, so nothing is clipped). The y
+            # axis stays symmetric about 0.
             span_x, span_y = xmax - xmin, ymax - ymin
             n_long = max(nx, ny)
+            pixel = max(span_x, span_y) / (n_long - 1)
+            n_short = max(8, int(np.ceil(min(span_x, span_y) / pixel - 1e-9)) + 1)
+            half_short = 0.5 * (n_short - 1) * pixel
             if span_x >= span_y:
-                nx, ny = n_long, max(8, int(round(n_long * span_y / span_x)))
+                nx, ny = n_long, n_short
+                ymin, ymax = -half_short, half_short
             else:
-                nx, ny = max(8, int(round(n_long * span_x / span_y))), n_long
+                nx, ny = n_short, n_long
+                x_mid = 0.5 * (xmin + xmax)
+                xmin, xmax = x_mid - half_short, x_mid + half_short
 
     if zmax is None or nz is None:
         if dz is None:

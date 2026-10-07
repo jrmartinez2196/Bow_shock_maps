@@ -300,7 +300,7 @@ def test_automatic_field_of_view_gives_square_pixels():
     maps = app.compute_maps()
     dx = np.diff(maps["x"]).mean()
     dy = np.diff(maps["y"]).mean()
-    assert dx == pytest.approx(dy, rel=0.05)
+    assert dx == pytest.approx(dy, rel=1e-6)  # exactly square
     assert maps["I_ff_total"].shape[1] < maps["I_ff_total"].shape[0]  # fewer columns than rows
 
 
@@ -369,3 +369,63 @@ def test_unknown_accuracy_is_rejected():
     app = _quick_app(accuracy="ultra")
     with pytest.raises(ValueError, match="accuracy"):
         app.compute_maps()
+
+
+# ---------------------------------------------------------------------
+# Layer thicknesses must be physical (regression: RS "muy grueso")
+# ---------------------------------------------------------------------
+
+
+def _all_nonnegative(values):
+    """True if every non-NaN value is >= 0. (A shock that is adiabatic at every
+    angle has no cold layer, so its cold-layer arrays are entirely NaN; that is
+    fine, but np.nanmin of an all-NaN array is NaN and fails any comparison.)"""
+    values = np.asarray(values, dtype=float)
+    return bool(np.all(values[~np.isnan(values)] >= 0.0))
+
+
+def _thermo(source, Vw=None, Vstar=None, n_ism=None, log_mdot=None):
+    app = BowShock(source, convolve=False)
+    if Vw is not None:
+        app.Vw = Vw * 1e5  # km/s -> cm/s
+    if Vstar is not None:
+        app.Vstar = Vstar * 1e5
+    if n_ism is not None:
+        app.n_ism = n_ism
+    if log_mdot is not None:
+        app.Mdot = 10**log_mdot * 1.989e33 / 3.156e7  # Msun/yr -> g/s
+    return app.compute_thermo()
+
+
+def test_radiative_reverse_shock_near_the_axis_with_a_slow_wind_is_not_absurdly_thick():
+    # Regression test. With V_wind = 100 km/s (RXJ0528+2838 parameters) the
+    # time criterion t_cool < t_adv = R/v_tan is satisfied at every angle
+    # near the axis, because v_tan -> 0 there. But the cooling length is then
+    # ~1.07 R, more than the accumulated mass can fill: the "radiative"
+    # solution had H_hot/R = 1.07 and a cold layer of NEGATIVE thickness. A
+    # gas that needs more than a radius to cool does not cool in its layer:
+    # it is adiabatic.
+    d = _thermo("RXJ0528+2838", Vw=100.0)
+    assert d["regime_RS"][0] == "adiabatic"
+    assert _all_nonnegative(d["H_RS_cold"])
+    assert np.max(d["H_RS_total"]) < 0.5  # thickest it gets is ~0.4 R, at large theta
+
+
+@pytest.mark.parametrize("source", ["RXJ0528+2838", "BD+43"])
+@pytest.mark.parametrize("Vw", [50.0, 100.0, 500.0, 3000.0])
+@pytest.mark.parametrize("Vstar", [50.0, 128.5, 300.0])
+@pytest.mark.parametrize("n_ism", [0.2, 6.0])
+@pytest.mark.parametrize("log_mdot", [-8.0, -6.0])
+def test_layers_are_physical_across_the_parameter_range(source, Vw, Vstar, n_ism, log_mdot):
+    # No negative thickness, none larger than the radius, no NaN in the hot
+    # layer, whichever regime each angle ends up in. (Outside this range --
+    # a wind of <= 30 km/s on a star at 300 km/s, or a star at ~2x the sound
+    # speed of the ISM -- the model's shock does not really exist and H/R > 1
+    # can still occur.)
+    d = _thermo(source, Vw=Vw, Vstar=Vstar, n_ism=n_ism, log_mdot=log_mdot)
+    for shock in ("RS", "FS"):
+        assert _all_nonnegative(d[f"H_{shock}_cold"]), shock
+        assert _all_nonnegative(d[f"H_{shock}_hot"]), shock
+        assert not np.isnan(d[f"H_{shock}_hot"]).any(), shock
+        assert not np.isnan(d[f"H_{shock}_total"]).any(), shock
+        assert np.max(d[f"H_{shock}_total"]) <= 1.0, shock
