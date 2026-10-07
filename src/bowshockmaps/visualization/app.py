@@ -372,7 +372,9 @@ class BowShock:
             'H_hot', 'H_cold', 'H_RS_total' : normalized thicknesses
             'v_perp'' : Perpendicular velocities [cm/s]
             'v_tan' : Tangential velocities [cm/s]
-            'ratio' : Cooling-to-advection time ratios
+            'ratio' : t_cool / t_adv, with t_adv the time the gas takes to cross the
+                      layer it would form if adiabatic; < 1 means radiative (the cooling
+                      length is shorter than that layer)
         """
         logger.info("Computing thermo")
         R0_corrected = self.get_R0_corrected()

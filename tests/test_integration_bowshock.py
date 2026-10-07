@@ -384,6 +384,14 @@ def _all_nonnegative(values):
     return bool(np.all(values[~np.isnan(values)] >= 0.0))
 
 
+def _assert_regime_is_cooling_vs_advection(d, shock):
+    """The regime is exactly t_cool < t_adv (cooling length shorter than the layer),
+    or radiative where no adiabatic flow exists (t_adv is NaN)."""
+    ratio = np.asarray(d[f"ratio_{shock}"], dtype=float)
+    radiative = np.asarray(d[f"regime_{shock}"]) == "radiative"
+    assert np.array_equal(radiative, (ratio < 1.0) | np.isnan(ratio)), shock
+
+
 def _thermo(source, Vw=None, Vstar=None, n_ism=None, log_mdot=None):
     app = BowShock(source, convolve=False)
     if Vw is not None:
@@ -429,3 +437,51 @@ def test_layers_are_physical_across_the_parameter_range(source, Vw, Vstar, n_ism
         assert not np.isnan(d[f"H_{shock}_hot"]).any(), shock
         assert not np.isnan(d[f"H_{shock}_total"]).any(), shock
         assert np.max(d[f"H_{shock}_total"]) <= 1.0, shock
+        _assert_regime_is_cooling_vs_advection(d, shock)
+
+
+def test_regime_has_no_singularity_at_the_symmetry_axis():
+    # The regime used to be t_cool < R/v_tan, which diverges where v_tan -> 0
+    # (the axis): every angle there was "radiative" whatever the shock, with a
+    # cooling layer of ~1 R. Now it compares with the thickness of the layer
+    # the gas would form if adiabatic, which is finite at the axis, so the apex
+    # is radiative or adiabatic according to the physics.
+    # A fast, tenuous wind (cooling length >> layer): adiabatic at the apex.
+    hot = _thermo("RXJ0528+2838", Vw=3000.0, Vstar=128.5, n_ism=0.2, log_mdot=-8.0)
+    assert hot["regime_RS"][0] == "adiabatic"
+    assert hot["ratio_RS"][0] > 1.0
+    # Dense gas that cools quickly (BD+43's forward shock): radiative at the apex.
+    cool = _thermo("BD+43")
+    assert cool["regime_FS"][0] == "radiative"
+    assert cool["ratio_FS"][0] < 1.0
+    # and in both the thickness at the apex is finite and well below a radius
+    assert 0.0 < hot["H_RS_total"][0] < 0.3
+    assert 0.0 < cool["H_FS_total"][0] < 0.3
+
+
+def test_forward_shock_cold_layer_appears_where_the_cooling_length_drops_below_the_layer():
+    # Wind of 500 km/s, v_star = 128.5 km/s, n_ISM = 0.2, Mdot = 1e-9: the
+    # reverse shock is adiabatic everywhere (its cooling length is ~4e4 times the
+    # layer) and the forward shock turns radiative at ~96 deg, where
+    # l_cool/H_ad crosses 1.
+    d = _thermo("RXJ0528+2838", Vw=500.0, Vstar=128.5, n_ism=0.2, log_mdot=-9.0)
+    theta = np.degrees(BowShock("RXJ0528+2838", convolve=False).theta_grid)
+    assert np.all(np.asarray(d["regime_RS"]) == "adiabatic")
+    radiative = np.asarray(d["regime_FS"]) == "radiative"
+    assert radiative.any() and not radiative[0]
+    onset = theta[np.argmax(radiative)]
+    assert onset == pytest.approx(96.0, abs=2.0)
+    assert np.all(radiative[np.argmax(radiative) :])  # and it stays radiative beyond
+    _assert_regime_is_cooling_vs_advection(d, "FS")
+
+
+def test_transition_to_radiative_leaves_a_nonnegative_cold_layer():
+    # Near the transition the cold layer from mass conservation (which uses v_tan)
+    # can come out marginally negative (1-5% of the hot layer) because the regime
+    # is decided with the adiabatic layer (v_adv); it is floored at zero. The hot
+    # layer is then the whole shocked layer.
+    d = _thermo("RXJ0528+2838", Vw=500.0, Vstar=128.5, n_ism=0.2, log_mdot=-9.0)
+    radiative = np.asarray(d["regime_FS"]) == "radiative"
+    assert _all_nonnegative(d["H_FS_cold"])
+    assert np.all(d["H_FS_hot"][radiative] > 0.0)
+    assert np.allclose(d["H_FS_total"], d["H_FS_hot"] + np.nan_to_num(d["H_FS_cold"]))
