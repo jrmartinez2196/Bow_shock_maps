@@ -104,6 +104,15 @@ class ShellGeometry:
         self._z_lo = self.C_z.min() - pad
         self._z_hi = self.C_z.max() + pad
 
+    @property
+    def bbox(self):
+        """Bounding box of the shell in the (rho, z) plane: (rho_hi, z_lo, z_hi) [cm].
+
+        The shell lies in rho in [0, rho_hi] and z in [z_lo, z_hi]; a
+        point outside it is in no layer.
+        """
+        return self._rho_hi, self._z_lo, self._z_hi
+
     def locate(self, rho, z):
         """Foot point and signed normal distance of points in the (rho, z) plane.
 

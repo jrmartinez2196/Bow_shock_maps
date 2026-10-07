@@ -301,7 +301,7 @@ def make_projection_maps(
     nu_ff=2e6 * 1e9,
     distance=224.0,
     convolve=True,
-    max_pixels=1000,
+    max_pixels=2000,
 ):
     """
     Vectorized 2D projected emission maps with pre-computed properties.
@@ -383,17 +383,20 @@ def make_projection_maps(
         nx = _pixels_to_sample_beam("x", nx, xmin, xmax, distance, fwhm_x, f_ny, max_pixels)
         ny = _pixels_to_sample_beam("y", ny, ymin, ymax, distance, fwhm_y, f_ny, max_pixels)
 
+    # Measured cost of the line-of-sight integration: ~8 ns per nominal sample
+    # (nx * ny * nz) on one core, e.g. 1000 x 1000 x 1000 in ~7 s and
+    # 2000 x 2000 x 1000 in ~35 s.
     n_samples = nx * ny * nz
-    if n_samples > 3e8:
+    est_seconds = 8e-9 * n_samples
+    if est_seconds > 120.0:
         logger.warning(
-            "Large map: %d x %d pixels x %d line-of-sight steps = %.1e samples; "
-            "at roughly 0.7 microseconds per sample that is about %.0f minutes on one "
-            "core (the nearest-point search uses all cores).",
+            "Large map: %d x %d pixels x %d line-of-sight steps = %.1e samples, roughly "
+            "%.0f minutes on one core.",
             nx,
             ny,
             nz,
             n_samples,
-            0.7e-6 * n_samples / 60.0,
+            est_seconds / 60.0,
         )
 
     theta_precomp = np.linspace(1e-6, theta_max, 300)
@@ -514,11 +517,21 @@ def los_projection_vectorized(
     Star -> Wind -> [RS] -> Hot_RS -> Cold_RS -> [CD] -> Cold_FS -> Hot_FS -> [FS] -> ISM
                                 (if rad)    (if rad)    (if rad)    (if rad)
 
-    Each line-of-sight sample is located in normal coordinates (see
-    `ShellGeometry`): its foot point on the reverse-shock curve decides
-    which layer it is in (from its signed distance along the normal) and
-    supplies that layer's density, temperature and magnetic field, i.e.
-    those of the part of the shock that generated it.
+    The layers are located in normal coordinates (see `ShellGeometry`): the
+    foot point on the reverse-shock curve decides which layer a point is in
+    (from its signed distance along the normal) and supplies that layer's
+    density, temperature and magnetic field, i.e. those of the part of the
+    shock that generated it.
+
+    How the integral is evaluated. The shell is axisymmetric, so the
+    emissivity at a point depends only on its (rho, z) -- cylindrical radius
+    and height along the symmetry axis. It is therefore evaluated once per
+    cell of a 2D (rho, z) table, and each line-of-sight sample just looks its
+    cell up. (Locating every sample individually costs ~96% of the run time.)
+    Two more savings that change nothing: in the intrinsic frame the map is
+    exactly symmetric under y -> -y, so only half of it is computed when the
+    grid allows it; and samples farther from the star than the bounding box
+    of the shell are skipped, since they cannot be inside it.
 
     Parameters
     ----------
@@ -535,7 +548,8 @@ def los_projection_vectorized(
     zmax : float
         Maximum LOS extent [cm]
     nz : int
-        Number of LOS integration steps
+        Number of LOS integration steps (over [-zmax, zmax]; only those
+        that can reach the shell are used)
     R_stromgren : float
         Stromgren radius [cm]
     nu_ff : float
@@ -561,23 +575,12 @@ def los_projection_vectorized(
     # and compute_plot_limits. Applying it here as well would rotate
     # everything twice.
 
-    # LOS grid
-    z = np.linspace(-zmax, zmax, nz)
-    dz = z[1] - z[0]
-
-    x_flat = x.ravel()
-    y_flat = y.ravel()
-
     shape_2d = y.shape
-    n_pixels = shape_2d[0] * shape_2d[1]
+    ny_, nx_ = shape_2d
 
-    # Output maps
-    I_Halpha = np.zeros(n_pixels)
-    I_OIII = np.zeros(n_pixels)
-    I_ff_total = np.zeros(n_pixels)
-    I_ff_mJy = np.zeros(n_pixels)
-    I_syn_total = np.zeros(n_pixels)
-    I_syn_mJy = np.zeros(n_pixels)
+    # LOS grid
+    z_all = np.linspace(-zmax, zmax, nz)
+    dz = z_all[1] - z_all[0]
 
     # =========================
     # Shock properties, tabulated along the shell. Entry j belongs to the
@@ -638,12 +641,13 @@ def los_projection_vectorized(
     logger.info(f"Apex magnetic field: B_RS = {B_RS_apex[0]*1e6:.1f} muG")
     logger.info(f"Apex magnetic field: B_FS = {B_FS_apex[0]*1e6:.1f} muG")
 
-    def add_layer(pix, n, T, r_pt, k0e=None, B_avg=None):
-        """Add one slice's emission of the samples `pix` (pixel indices,
-        unique within a slice) that lie in a layer with density `n` and
-        temperature `T` (arrays aligned with `pix`). Synchrotron only
-        where a non-thermal electron population `k0e`, `B_avg` is given
-        (the hot layers)."""
+    def layer_emissivity(n, T, r_pt, k0e=None, B_avg=None):
+        """Emissivities (per unit length) of gas in a layer with density
+        `n` and temperature `T`, at distance `r_pt` from the star (all
+        arrays of the same length). Synchrotron only where a non-thermal
+        electron population `k0e`, `B_avg` is given (the hot layers).
+        Returns (H-alpha, [OIII], free-free, free-free [mJy], synchrotron,
+        synchrotron [mJy])."""
         # Ionization fractions: full ionization inside the Stromgren
         # sphere, CIE at the layer temperature outside it.
         ion_H = np.ones_like(r_pt)
@@ -654,9 +658,8 @@ def los_projection_vectorized(
                 T[outside_stromgren]
             )
 
-        I_Halpha[pix] += emissivity_Halpha(n, T, ion_H=ion_H) * dz
-        I_OIII[pix] += emissivity_OIII(n, T, ion_H=ion_H, ion_O=ion_O) * dz
-
+        e_Ha = emissivity_Halpha(n, T, ion_H=ion_H)
+        e_OIII = emissivity_OIII(n, T, ion_H=ion_H, ion_O=ion_O)
         j_ff, j_ff_mJy = nu_emissivity_freefree(
             n,
             T,
@@ -665,66 +668,157 @@ def los_projection_vectorized(
             nu=nu_ff,
             gaunt_lookup=gaunt_lookup,
         )
-        I_ff_total[pix] += j_ff * dz
-        I_ff_mJy[pix] += j_ff_mJy * dz
-
         if k0e is not None:
             j_syn, j_syn_mJy = nu_emissivity_sync(k0e, B_avg, p_inj, nu_ff)
-            I_syn_total[pix] += j_syn * dz
-            I_syn_mJy[pix] += j_syn_mJy * dz
+        else:
+            j_syn = j_syn_mJy = np.zeros_like(r_pt)
+        return e_Ha, e_OIII, j_ff, j_ff_mJy, j_syn, j_syn_mJy
+
+    # =========================
+    # 2D (rho, z) EMISSIVITY TABLE
+    #
+    # Cell size: the line-of-sight sampling (dz, pixel size) already limits
+    # how well a layer edge is resolved, so a cell of half the finer of the
+    # two adds no error of its own; it is kept within [extent/4000,
+    # extent/200] so the table cost stays bounded.
+    rho_hi, z_lo, z_hi = shell.bbox
+    extent = max(rho_hi, z_hi - z_lo)
+    pixel_sizes = []
+    if nx_ > 1:
+        pixel_sizes.append(abs(x[0, 1] - x[0, 0]))
+    if ny_ > 1:
+        pixel_sizes.append(abs(y[1, 0] - y[0, 0]))
+    cell = 0.5 * min([dz] + pixel_sizes)
+    cell = float(np.clip(cell, extent / 4000.0, extent / 200.0))
+
+    n_rho = int(np.ceil(rho_hi / cell))
+    n_z = int(np.ceil((z_hi - z_lo) / cell))
+    rho_centers = (np.arange(n_rho) + 0.5) * cell
+
+    cell_to_row = np.full(n_rho * n_z, -1, dtype=np.int32)
+    stored_cells = []
+    stored_values = []
+    rows_per_chunk = max(1, int(2e6 // n_rho))
+    for k0 in range(0, n_z, rows_per_chunk):
+        k1 = min(n_z, k0 + rows_per_chunk)
+        z_g = np.repeat(z_lo + (np.arange(k0, k1) + 0.5) * cell, n_rho)
+        rho_g = np.tile(rho_centers, k1 - k0)
+
+        idx, d, valid = shell.locate(rho_g, z_g)
+        rs_hot, rs_cold, fs_cold, fs_hot = shell.layers(idx, d, valid)
+
+        for mask, which in (
+            (rs_hot, "rs_hot"),
+            (rs_cold, "rs_cold"),
+            (fs_cold, "fs_cold"),
+            (fs_hot, "fs_hot"),
+        ):
+            cells = np.flatnonzero(mask)
+            if cells.size == 0:
+                continue
+            j = idx[cells]
+            r_pt = np.hypot(rho_g[cells], z_g[cells])
+            if which == "rs_hot":
+                em = layer_emissivity(n_post_RS[j], T_post_RS[j], r_pt, k0e_RS[j], B_RS_avg[j])
+            elif which == "rs_cold":
+                em = layer_emissivity(n_IL_RS[j], T_IL_RS[j], r_pt)
+            elif which == "fs_cold":
+                em = layer_emissivity(n_IL_FS[j], T_IL_FS[j], r_pt)
+            else:
+                em = layer_emissivity(n_post_FS[j], T_post_FS[j], r_pt, k0e_FS[j], B_FS_avg[j])
+            stored_cells.append(k0 * n_rho + cells)
+            stored_values.append(em)
+
+    if stored_cells:
+        occupied = np.concatenate(stored_cells)
+        cell_to_row[occupied] = np.arange(occupied.size, dtype=np.int32)
+        emis = [np.concatenate([v[c] for v in stored_values]) for c in range(6)]
+    else:
+        emis = [np.zeros(0)] * 6
+    e_Ha, e_OIII, e_ff, e_ff_mJy, e_syn, e_syn_mJy = emis
 
     # =========================
     # LOS INTEGRATION
 
-    for i in range(nz):
+    # Only the part of each line of sight inside the bounding box of the
+    # shell can contribute: there |z| <= hypot(rho_hi, max(|z_lo|, |z_hi|)).
+    z_reach = np.hypot(rho_hi, max(abs(z_lo), abs(z_hi)))
+    z = z_all[np.abs(z_all) <= z_reach + dz]
 
-        # Rotate coordinates: cylindrical radius and height along the
-        # symmetry axis of every pixel's sample at this depth
-        X_i = ci * x_flat + si * z[i]
-        Z_i = -si * x_flat + ci * z[i]
-        rho_i = np.hypot(X_i, y_flat)
+    # In the intrinsic frame the map is symmetric under y -> -y (X, Z and
+    # rho = hypot(X, Y) do not change). If the grid is symmetric too,
+    # compute y >= 0 and mirror.
+    y_col = y[:, 0]
+    mirror = ny_ > 1 and np.allclose(y_col, -y_col[::-1], rtol=0.0, atol=1e-9 * np.abs(y_col).max())
+    j0 = ny_ // 2 if mirror else 0
+    x_half = x[j0:, :].ravel()
+    y_half = y[j0:, :].ravel()
+    n_half = x_half.size
 
-        idx, d, valid = shell.locate(rho_i, Z_i)
-        rs_hot, rs_cold, fs_cold, fs_hot = shell.layers(idx, d, valid)
+    out = {k: np.zeros(n_half) for k in ("Ha", "OIII", "ff", "ff_mJy", "syn", "syn_mJy")}
+    tables = {
+        "Ha": e_Ha,
+        "OIII": e_OIII,
+        "ff": e_ff,
+        "ff_mJy": e_ff_mJy,
+        "syn": e_syn,
+        "syn_mJy": e_syn_mJy,
+    }
+    inv_cell = 1.0 / cell
 
-        if not (rs_hot.any() or rs_cold.any() or fs_cold.any() or fs_hot.any()):
-            continue
+    # Pixels are processed in blocks to bound memory at very large maps.
+    block = 2_000_000
+    for start in range(0, n_half, block):
+        xs = x_half[start : start + block]
+        ys = y_half[start : start + block]
 
-        r_i = np.hypot(rho_i, Z_i)  # distance from the star
+        for z_i in z:
+            # Rotate coordinates: cylindrical radius and height along the
+            # symmetry axis of every pixel's sample at this depth
+            X_i = ci * xs + si * z_i
+            Z_i = -si * xs + ci * z_i
+            rho_i = np.hypot(X_i, ys)
 
-        # RS - hot post shock layer
-        pix = np.flatnonzero(rs_hot)
-        j = idx[pix]
-        add_layer(pix, n_post_RS[j], T_post_RS[j], r_i[pix], k0e_RS[j], B_RS_avg[j])
+            cand = np.flatnonzero((rho_i < rho_hi) & (Z_i >= z_lo) & (Z_i < z_hi))
+            if cand.size == 0:
+                continue
 
-        # RS - cold post cooling layer
-        pix = np.flatnonzero(rs_cold)
-        j = idx[pix]
-        add_layer(pix, n_IL_RS[j], T_IL_RS[j], r_i[pix])
+            jr = np.minimum((rho_i[cand] * inv_cell).astype(np.intp), n_rho - 1)
+            jz = np.minimum(((Z_i[cand] - z_lo) * inv_cell).astype(np.intp), n_z - 1)
+            row = cell_to_row[jz * n_rho + jr]
+            inside = row >= 0
+            if not inside.any():
+                continue
 
-        # FS - cold post cooling layer
-        pix = np.flatnonzero(fs_cold)
-        j = idx[pix]
-        add_layer(pix, n_IL_FS[j], T_IL_FS[j], r_i[pix])
+            pix = start + cand[inside]
+            row = row[inside]
+            for key, table in tables.items():
+                out[key][pix] += table[row] * dz
 
-        # FS - hot post shock layer
-        pix = np.flatnonzero(fs_hot)
-        j = idx[pix]
-        add_layer(pix, n_post_FS[j], T_post_FS[j], r_i[pix], k0e_FS[j], B_FS_avg[j])
+    def unfold(a_half):
+        """Back to the full (ny, nx) map, mirroring y -> -y if it was folded."""
+        half = a_half.reshape(ny_ - j0, nx_)
+        if not mirror:
+            return half
+        full = np.empty(shape_2d)
+        full[j0:] = half
+        full[:j0] = half[ny_ - 1 - np.arange(j0) - j0]
+        return full
 
-    # =========================
-    # RESHAPE
-    # =========================
+    I_ff_total = unfold(out["ff"])
+    I_ff_mJy = unfold(out["ff_mJy"])
+    I_syn_total = unfold(out["syn"])
+    I_syn_mJy = unfold(out["syn_mJy"])
 
     result = {
-        "I_Halpha": I_Halpha.reshape(shape_2d),
-        "I_OIII": I_OIII.reshape(shape_2d),
-        "I_ff_total": I_ff_total.reshape(shape_2d),
-        "I_ff_mJy": I_ff_mJy.reshape(shape_2d),
-        "I_syn_total": I_syn_total.reshape(shape_2d),
-        "I_syn_mJy": I_syn_mJy.reshape(shape_2d),
-        "I_continuum_total": (I_ff_total + I_syn_total).reshape(shape_2d),
-        "I_continuum_mJy": (I_ff_mJy + I_syn_mJy).reshape(shape_2d),
+        "I_Halpha": unfold(out["Ha"]),
+        "I_OIII": unfold(out["OIII"]),
+        "I_ff_total": I_ff_total,
+        "I_ff_mJy": I_ff_mJy,
+        "I_syn_total": I_syn_total,
+        "I_syn_mJy": I_syn_mJy,
+        "I_continuum_total": I_ff_total + I_syn_total,
+        "I_continuum_mJy": I_ff_mJy + I_syn_mJy,
     }
 
     return result

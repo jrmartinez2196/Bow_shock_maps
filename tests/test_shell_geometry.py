@@ -204,3 +204,62 @@ def test_a_beam_much_smaller_than_a_pixel_only_changes_the_units():
     assert np.allclose(out["I_Halpha"], img, rtol=1e-12)
     sigma = maps.fwhm_to_sigma(fwhm)
     assert np.allclose(out["I_ff_mJy"], img * 2 * np.pi * sigma * sigma, rtol=1e-12)
+
+
+# ---------------------------------------------------------------------
+# The speed-ups in los_projection_vectorized must not change the result
+# ---------------------------------------------------------------------
+
+
+def _full_run(shell, x, y, monkeypatch, zmax=4.0, nz=801):
+    monkeypatch.setattr(maps, "emissivity_Halpha", lambda n, T, ion_H=None: n)
+    props = _Props(lambda th: np.ones_like(th))
+    return maps.los_projection_vectorized(
+        x, y, shell, props, _Props(lambda th: np.ones_like(th)),
+        inclination=0.6, zmax=zmax, nz=nz, R_stromgren=1e30,
+    )["I_Halpha"]  # fmt: skip
+
+
+# The integral is a Riemann sum with step dz, so two evaluations that are
+# the same up to rounding can still differ by one step if a sample lands
+# exactly on a layer surface. Compare to within that.
+DZ = 8.0 / 800
+
+
+def test_y_mirror_symmetry_shortcut_gives_the_same_map(monkeypatch):
+    # In the intrinsic frame the map is exactly symmetric under y -> -y.
+    # With a symmetric grid only half is computed and mirrored; shifting
+    # the grid by a hair turns that off, and both must agree. (Grid values
+    # avoid sitting exactly on a layer radius: 1, 1.1, 1.3, 1.4, 1.7.)
+    shell = sphere_shell(theta_max_deg=170.0)
+    X, Y = np.meshgrid(np.linspace(-1.55, 1.55, 9), np.linspace(-1.55, 1.55, 8))
+
+    folded = _full_run(shell, X, Y, monkeypatch)
+    unfolded = _full_run(shell, X, Y + 1e-7, monkeypatch)  # no longer exactly symmetric
+
+    assert np.allclose(folded, unfolded, rtol=1e-3, atol=2 * DZ)
+    assert np.array_equal(folded, folded[::-1])  # exactly mirrored
+
+
+def test_y_mirror_symmetry_shortcut_with_an_odd_number_of_rows(monkeypatch):
+    shell = sphere_shell(theta_max_deg=170.0)
+    X, Y = np.meshgrid(np.linspace(-1.55, 1.55, 7), np.linspace(-1.55, 1.55, 7))  # includes y = 0
+
+    folded = _full_run(shell, X, Y, monkeypatch)
+    unfolded = _full_run(shell, X, Y + 1e-7, monkeypatch)
+
+    assert np.allclose(folded, unfolded, rtol=1e-3, atol=2 * DZ)
+    assert np.array_equal(folded, folded[::-1])
+
+
+def test_skipping_samples_outside_the_shell_box_changes_nothing(monkeypatch):
+    # Only the part of each line of sight inside the bounding box of the
+    # shell is integrated. Doubling zmax with the same step dz adds only
+    # samples outside it, so the result must not change.
+    shell = sphere_shell(theta_max_deg=170.0)
+    X, Y = np.meshgrid(np.linspace(-1.55, 1.55, 7), np.linspace(-1.55, 1.55, 6))
+
+    near = _full_run(shell, X, Y, monkeypatch, zmax=4.0, nz=801)  # dz = 0.01
+    far = _full_run(shell, X, Y, monkeypatch, zmax=8.0, nz=1601)  # same dz
+
+    assert np.allclose(near, far, rtol=1e-9, atol=0.0)

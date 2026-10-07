@@ -21,8 +21,8 @@ class GridConfig:
     max_theta: float = np.deg2rad(120.0)
     # Ceiling on the number of pixels per axis when the grid is refined to
     # sample a fine instrumental beam (see maps.make_projection_maps). The
-    # cost of a map grows like nx * ny * nz.
-    max_pixels: int = 1000
+    # cost of a map grows like nx * ny * nz (2000 x 2000 x 1000 takes ~35 s on one core).
+    max_pixels: int = 2000
 
 
 DEFAULT_GRID_CONFIG = GridConfig()

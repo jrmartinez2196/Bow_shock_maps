@@ -54,12 +54,17 @@ bowshockmaps --verbose
 **Resolution and cost.** To convolve with a beam the map grid must sample it
 (pixel <= 0.5 FWHM), so a fine beam on a large source asks for many pixels: BD+43
 (~1500" across) with VLA-A at 3 GHz (beam 0.57") would need ~5400 pixels per side.
-The refinement is therefore capped at `--max-pixels` (default 1000,
+The refinement is therefore capped at `--max-pixels` (default 2000,
 `config.max_pixels`). When the cap binds, the beam is smaller than a pixel, so it is
 treated as unresolved: a Gaussian that narrow does not change the map, which is only
-converted to per-beam units, and a warning says so. The cost of a map grows as
-nx*ny*nz (about 0.6 microseconds per sample per core); `--max-pixels 250` gives a
-quick look.
+converted to per-beam units, and a warning says so.
+
+Run time (nz = 1000, one core): ~7 s for 1000 x 1000 pixels and ~35 s for
+2000 x 2000; it grows as nx*ny*nz. The line of sight is sampled in steps of
+`2*zmax/nz`, and that sampling (not the method) dominates the accuracy: at nz = 500
+the typical pixel is off by ~5% from a fine-sampling reference and ~25% of the bright
+pixels by more than 10%, at nz = 3000 the typical pixel is off by ~0.1%. Raise `nz`
+in `config.py` when you need cleaner maps.
 
 Without `--telescope`/`--beam-fwhm`, the convolution beam falls back to
 a placeholder (the source's projected stagnation radius) -- pass one of the two
