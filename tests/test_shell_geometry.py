@@ -263,3 +263,74 @@ def test_skipping_samples_outside_the_shell_box_changes_nothing(monkeypatch):
     far = _full_run(shell, X, Y, monkeypatch, zmax=8.0, nz=1601)  # same dz
 
     assert np.allclose(near, far, rtol=1e-9, atol=0.0)
+
+
+# ---------------------------------------------------------------------
+# Grid derived from the shell: sky extent, line-of-sight reach, layer scale
+# ---------------------------------------------------------------------
+
+
+def _brute_force_extent(shell, inclination, n_phi=720):
+    """Sky extent and line-of-sight reach from points sampled all over the
+    surface of revolution (every boundary of every layer, every azimuth)."""
+    ci, si = np.cos(inclination), np.sin(inclination)
+    phi = np.linspace(0.0, 2.0 * np.pi, n_phi, endpoint=False)
+    xs, ys, zs = [], [], []
+    for d in (0.0 * shell.d1, shell.d1, shell.d2, shell.d3, shell.d4):
+        rho = shell.C_rho + d * shell.n_rho
+        z = shell.C_z + d * shell.n_z
+        X = rho[:, None] * np.cos(phi)[None, :]
+        Y = rho[:, None] * np.sin(phi)[None, :]
+        Z = np.broadcast_to(z[:, None], X.shape)
+        xs.append(ci * X - si * Z)
+        ys.append(Y)
+        zs.append(si * X + ci * Z)
+    x, y, z_los = (np.concatenate([a.ravel() for a in lst]) for lst in (xs, ys, zs))
+    return min(x.min(), 0.0), max(x.max(), 0.0), np.abs(y).max(), np.abs(z_los).max()
+
+
+@pytest.mark.parametrize("inclination_deg", [0.0, 15.0, 45.0, 75.0, 90.0])
+@pytest.mark.parametrize("theta_max_deg", [90.0, 135.0])
+def test_sky_extent_and_los_reach_match_brute_force(inclination_deg, theta_max_deg):
+    shell = sphere_shell(theta_max_deg=theta_max_deg)
+    inc = np.deg2rad(inclination_deg)
+    x_min, x_max, y_half = shell.sky_extent(inc)
+    reach = shell.los_reach(inc)
+    bx_min, bx_max, by, bz = _brute_force_extent(shell, inc)
+    assert x_min == pytest.approx(bx_min, abs=2e-3)
+    assert x_max == pytest.approx(bx_max, abs=2e-3)
+    assert y_half == pytest.approx(by, abs=2e-3)
+    assert reach == pytest.approx(bz, abs=2e-3)
+
+
+def test_sky_extent_of_a_full_sphere_is_its_radius_for_every_inclination():
+    # A full sphere of outer radius 1.7 looks like a disk of radius 1.7
+    # from every direction, and the line of sight needs |z| <= 1.7.
+    shell = sphere_shell(theta_max_deg=179.99)
+    for inclination in np.deg2rad([0.0, 30.0, 60.0, 90.0]):
+        x_min, x_max, y_half = shell.sky_extent(inclination)
+        assert (x_min, x_max, y_half) == pytest.approx((-1.7, 1.7, 1.7), abs=2e-3)
+        assert shell.los_reach(inclination) == pytest.approx(1.7, abs=2e-3)
+
+
+def test_thinnest_layer_ignores_a_layer_that_carries_almost_no_emission():
+    # Layers 0.5, 0.05, 0.2, 0.001 thick (in R0). The 0.001 one is far
+    # thinner, but with the same density its emission measure is a tiny
+    # fraction of the total, so it must not set the scale (this is
+    # BD+43's forward-shock hot layer).
+    shell = sphere_shell(thicknesses=(0.5, 0.05, 0.2, 0.001))
+    ones = np.ones_like(shell.theta)
+    assert shell.thinnest_layer((ones, ones, ones, ones)) == pytest.approx(0.05)
+
+
+def test_thinnest_layer_counts_a_thin_layer_that_does_carry_emission():
+    # Same layers, but the thin one is 100x denser: n^2 makes it matter.
+    shell = sphere_shell(thicknesses=(0.5, 0.05, 0.2, 0.001))
+    ones = np.ones_like(shell.theta)
+    assert shell.thinnest_layer((ones, ones, ones, 100.0 * ones)) == pytest.approx(0.001)
+
+
+def test_thinnest_layer_is_none_for_a_shell_without_layers():
+    shell = sphere_shell(thicknesses=(0.0, 0.0, 0.0, 0.0))
+    ones = np.ones_like(shell.theta)
+    assert shell.thinnest_layer((ones, ones, ones, ones)) is None

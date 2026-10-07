@@ -35,6 +35,16 @@ logger = logging.getLogger(__name__)
 # (see ShellGeometry); neighbouring samples must be much closer than a layer.
 N_ARC_SAMPLES = 3000
 
+# Automatic grid (see make_projection_maps). The line-of-sight step is a fraction
+# of the thickness of the thinnest layer that matters: the error of the integral
+# through a layer goes as step/thickness. Measured on RXJ0528+2838, BD+43 and a
+# fast-wind case, step = thickness/6 gives a median error of ~1% in the bright
+# pixels, and thickness/12 about half that.
+DZ_DIVISOR = {"fast": 3.0, "normal": 6.0, "fine": 12.0}
+DZ_MIN_R0 = 0.0015  # [R0] floor on the step, to bound the cost
+DZ_MAX_R0 = 0.05  # [R0] a coarser step is meaningless
+FOV_MARGIN = 0.03  # fraction of the larger extent added on every side of the shell
+
 ion_table = IonizationTable(IONIZATION_TABLE_FILE)
 
 
@@ -277,8 +287,8 @@ def make_projection_maps(
     R_RS_func,
     inclination=0.0,
     PA=0.0,
-    zmax=5e15,
-    nz=75,
+    zmax=None,
+    nz=None,
     fwhm_x=3.0,
     fwhm_y=3.0,
     f_ny=0.5,
@@ -302,6 +312,8 @@ def make_projection_maps(
     distance=224.0,
     convolve=True,
     max_pixels=2000,
+    accuracy="normal",
+    dz=None,
 ):
     """
     Vectorized 2D projected emission maps with pre-computed properties.
@@ -311,8 +323,12 @@ def make_projection_maps(
 
     Parameters
     ----------
-    xlim, ylim : float
-        Map limits [cm]
+    xmin, xmax, ymin, ymax : float or None
+        Map limits [cm]. Any that is None is taken from the shell: the
+        extent of the shell projected on the sky for this inclination, plus
+        a small margin (`ShellGeometry.sky_extent`). If all four are None
+        the pixels are made square, with ``max(nx, ny)`` pixels along the
+        longer side.
     nx, ny : int
         Number of pixels in x and y
     R_RS_func : callable
@@ -324,10 +340,12 @@ def make_projection_maps(
         maps are computed in the intrinsic frame (apex along -x) and
         the position angle is applied at display time, by
         `visualization.plot_maps` (Affine2D rotation by PA - 90 deg).
-    zmax : float
-        Maximum LOS extent [cm]
-    nz : int
-        Number of LOS integration steps
+    zmax : float or None
+        Maximum LOS extent [cm]. None: the part of the line of sight where
+        the shell can be (`ShellGeometry.los_reach`).
+    nz : int or None
+        Number of LOS integration steps over [-zmax, zmax]. None: derived
+        from the step ``dz``.
     fwhm_x, fwhm_y : float
         beam size [arcsec]
     f_ny : float
@@ -357,6 +375,11 @@ def make_projection_maps(
     distance : float
         Source distance [pc]
 
+    accuracy : {"fast", "normal", "fine"}
+        Sets the line-of-sight step when it is derived: the thickness of
+        the thinnest layer that matters divided by 3, 6 or 12.
+    dz : float or None
+        Line-of-sight step [cm]; overrides ``accuracy``.
     max_pixels : int
         Ceiling on the pixels per axis when the grid is refined to sample
         the beam. If a beam is too fine to be sampled within it, the beam
@@ -375,29 +398,6 @@ def make_projection_maps(
     logger.info(f"Beam size: {fwhm_x:.3g} arcsec")
 
     lam = 10**lmb
-
-    # ==========================
-    # Resolution check
-    # =========================
-    if convolve:
-        nx = _pixels_to_sample_beam("x", nx, xmin, xmax, distance, fwhm_x, f_ny, max_pixels)
-        ny = _pixels_to_sample_beam("y", ny, ymin, ymax, distance, fwhm_y, f_ny, max_pixels)
-
-    # Measured cost of the line-of-sight integration: ~8 ns per nominal sample
-    # (nx * ny * nz) on one core, e.g. 1000 x 1000 x 1000 in ~7 s and
-    # 2000 x 2000 x 1000 in ~35 s.
-    n_samples = nx * ny * nz
-    est_seconds = 8e-9 * n_samples
-    if est_seconds > 120.0:
-        logger.warning(
-            "Large map: %d x %d pixels x %d line-of-sight steps = %.1e samples, roughly "
-            "%.0f minutes on one core.",
-            nx,
-            ny,
-            nz,
-            n_samples,
-            est_seconds / 60.0,
-        )
 
     theta_precomp = np.linspace(1e-6, theta_max, 300)
     rr_precomp = R_RS_func(theta_precomp)  # already normalized
@@ -447,6 +447,100 @@ def make_projection_maps(
         H_FS_cold=fs_props["H_cold"](theta_arc),
         H_FS_hot=fs_props["H_hot"](theta_arc),
     )
+
+    # ==========================================================
+    # Grid derived from the shell: field of view, line-of-sight range and step.
+    # Anything given explicitly is used as given.
+    # ==========================================================
+    if accuracy not in DZ_DIVISOR:
+        raise ValueError(f"accuracy must be one of {sorted(DZ_DIVISOR)}, got {accuracy!r}")
+
+    fov_given = [v is not None for v in (xmin, xmax, ymin, ymax)]
+    if not all(fov_given):
+        x_lo, x_hi, y_half = shell.sky_extent(inclination)
+        margin = FOV_MARGIN * max(x_hi - x_lo, 2.0 * y_half)
+        auto_limits = (x_lo - margin, x_hi + margin, -(y_half + margin), y_half + margin)
+        xmin, xmax, ymin, ymax = (
+            v if v is not None else a for v, a in zip((xmin, xmax, ymin, ymax), auto_limits)
+        )
+        if not any(fov_given):
+            # Square pixels: max(nx, ny) pixels along the longer side
+            span_x, span_y = xmax - xmin, ymax - ymin
+            n_long = max(nx, ny)
+            if span_x >= span_y:
+                nx, ny = n_long, max(8, int(round(n_long * span_y / span_x)))
+            else:
+                nx, ny = max(8, int(round(n_long * span_x / span_y))), n_long
+
+    if zmax is None or nz is None:
+        if dz is None:
+            densities = tuple(
+                p[key](theta_arc)
+                for p, key in (
+                    (rs_props, "n_post"),
+                    (rs_props, "n_IL"),
+                    (fs_props, "n_IL"),
+                    (fs_props, "n_post"),
+                )
+            )
+            h_thin = shell.thinnest_layer(densities)
+            if h_thin is None:
+                h_thin = 0.05 * R0_phys  # no layers to resolve
+            dz = float(
+                np.clip(h_thin / DZ_DIVISOR[accuracy], DZ_MIN_R0 * R0_phys, DZ_MAX_R0 * R0_phys)
+            )
+        else:
+            h_thin = None
+        z_reach = (1.0 + FOV_MARGIN) * shell.los_reach(inclination)
+        if zmax is None and nz is None:
+            k_steps = int(np.ceil(z_reach / dz))
+            zmax, nz = k_steps * dz, 2 * k_steps + 1  # step exactly dz, includes z = 0
+        elif zmax is None:
+            zmax = z_reach  # nz given: step = 2*zmax/(nz-1)
+        else:
+            nz = 2 * int(np.ceil(zmax / dz)) + 1  # zmax given: step ~ dz
+        logger.info(
+            "Grid: x in [%.2f, %.2f], y in [%.2f, %.2f] R0, %d x %d pixels; line of sight "
+            "|z| <= %.2f R0 in %d steps of %.4f R0%s",
+            xmin / R0_phys,
+            xmax / R0_phys,
+            ymin / R0_phys,
+            ymax / R0_phys,
+            nx,
+            ny,
+            zmax / R0_phys,
+            nz,
+            2.0 * zmax / (nz - 1) / R0_phys,
+            (
+                ""
+                if h_thin is None
+                else f" (thinnest relevant layer {h_thin / R0_phys:.4f} R0, {accuracy})"
+            ),
+        )
+
+    # ==========================
+    # Resolution check
+    # =========================
+    if convolve:
+        nx = _pixels_to_sample_beam("x", nx, xmin, xmax, distance, fwhm_x, f_ny, max_pixels)
+        ny = _pixels_to_sample_beam("y", ny, ymin, ymax, distance, fwhm_y, f_ny, max_pixels)
+
+    # Measured cost of the line-of-sight integration: ~8 ns per nominal sample
+    # (nx * ny * nz) on one core when most of the line of sight is wasted
+    # (zmax >> reach), up to ~3x that when it is not (derived range); and the
+    # table of emissivities costs ~3 us per cell, see los_projection_vectorized.
+    n_samples = nx * ny * nz
+    est_seconds = 25e-9 * n_samples
+    if est_seconds > 120.0:
+        logger.warning(
+            "Large map: %d x %d pixels x %d line-of-sight steps = %.1e samples, roughly "
+            "%.0f minutes on one core.",
+            nx,
+            ny,
+            nz,
+            n_samples,
+            est_seconds / 60.0,
+        )
 
     # Generate 2D coordinate grid
     x_vals = np.linspace(xmin, xmax, nx)

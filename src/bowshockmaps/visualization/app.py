@@ -13,6 +13,9 @@ import numpy as np
 from matplotlib.widgets import Button, Slider, TextBox
 from scipy.interpolate import interp1d
 
+from bowshockmaps.config import accuracy as DEFAULT_ACCURACY
+from bowshockmaps.config import auto_los as DEFAULT_AUTO_LOS
+from bowshockmaps.config import fov as DEFAULT_FOV
 from bowshockmaps.config import max_pixels as DEFAULT_MAX_PIXELS
 from bowshockmaps.config import max_theta, nx, ny, nz, zmax
 from bowshockmaps.constants import Msun_yr, kB, mp, mu
@@ -127,9 +130,14 @@ class BowShock:
         logger.info("Loading R_RS function...")
         self.update_R_RS_func()
 
-        # Map calculation parameters
-        self.zmax = zmax * self.get_R0_corrected()
-        self.nz = nz
+        # Map calculation parameters. None means "derive it from the shell" (see
+        # maps.make_projection_maps); setting these attributes by hand overrides.
+        if DEFAULT_AUTO_LOS:
+            self.zmax = None
+            self.nz = None
+        else:
+            self.zmax = zmax * self.get_R0_corrected()
+            self.nz = nz
         self.nx = nx
         self.ny = ny
 
@@ -177,6 +185,8 @@ class BowShock:
         beam_fwhm=None,
         band=None,
         max_pixels=None,
+        fov=None,
+        accuracy=None,
     ):
         """
         Initialize bow shock model with parameters from file.
@@ -214,6 +224,13 @@ class BowShock:
         max_pixels : int, optional
             Ceiling on pixels per axis when the grid is refined to sample a
             fine beam (default: `config.max_pixels`).
+        fov : float, optional
+            Half-width of the (square) field of view, in R0 units. Default
+            (`config.fov`, None): derived from the shell.
+        accuracy : {"fast", "normal", "fine"}, optional
+            Line-of-sight step when it is derived: the thickness of the
+            thinnest layer that matters divided by 3, 6 or 12 (default:
+            `config.accuracy`).
 
         Raises
         ------
@@ -231,6 +248,8 @@ class BowShock:
         self._band_override = band
         self._initialize_model()
         self.max_pixels = DEFAULT_MAX_PIXELS if max_pixels is None else max_pixels
+        self.fov = DEFAULT_FOV if fov is None else fov
+        self.accuracy = DEFAULT_ACCURACY if accuracy is None else accuracy
         self._check_telescope_covers(self.nu_ff)
         self._initialize_plots()
 
@@ -480,15 +499,18 @@ class BowShock:
             f"Projected stagnation point distance = {R0_proj/np.cos(np.deg2rad(self.inclination)):.1f} ''"
         )
 
-        sini = np.sin(np.deg2rad(self.inclination))
-
         fwhm = self.get_beam_fwhm(R0_proj)
 
+        # Field of view: derived from the shell (None) unless a half-width
+        # in R0 units was given (a square field centered on the star).
+        if self.fov is None:
+            fov_limits = dict(xmin=None, xmax=None, ymin=None, ymax=None)
+        else:
+            half = self.fov * R0_corrected
+            fov_limits = dict(xmin=-half, xmax=half, ymin=-half, ymax=half)
+
         x_vals_arcsec, y_vals_arcsec, result = make_projection_maps(
-            xmin=-(6.0 + 2.0 * sini**2) * R0_corrected,
-            xmax=(6.0 + 2.0 * sini**2) * R0_corrected,
-            ymin=-(6.0 + 2.0 * sini**2) * R0_corrected,
-            ymax=(6.0 + 2.0 * sini**2) * R0_corrected,
+            **fov_limits,
             nx=self.nx,
             ny=self.ny,
             theta_max=max_theta,
@@ -516,6 +538,7 @@ class BowShock:
             R_stromgren=R_str,
             nu_ff=self.nu_ff,
             max_pixels=self.max_pixels,
+            accuracy=self.accuracy,
             distance=self.distance,
             convolve=convolve,
         )

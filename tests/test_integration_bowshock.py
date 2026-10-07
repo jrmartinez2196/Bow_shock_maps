@@ -266,3 +266,106 @@ def test_very_fine_beam_does_not_blow_up_the_grid():
 
     assert maps["I_Halpha"].shape == (40, 40)
     assert np.isfinite(maps["I_Halpha"]).all()
+
+
+# ---------------------------------------------------------------------
+# Automatic grid: field of view, line-of-sight range and step
+# ---------------------------------------------------------------------
+
+
+def _quick_app(**kwargs):
+    app = BowShock("RXJ0528+2838", convolve=False, **kwargs)
+    app.nx = app.ny = 40
+    app.thermo_data = app.compute_thermo()
+    return app
+
+
+@pytest.mark.parametrize("inclination", [0.0, 30.0, 75.0, 90.0])
+def test_automatic_field_of_view_contains_the_whole_shell(inclination):
+    # Regression test for a fixed field of view (+-(6+2 sin^2 i) R0) that
+    # clips the shell at large theta_max or low inclination. Emission on the
+    # outermost ring of pixels would mean the structure is cut off.
+    app = _quick_app(accuracy="fast")
+    app.inclination = inclination
+    maps = app.compute_maps()
+    for key in ("I_Halpha", "I_OIII", "I_ff_total", "I_syn_total"):
+        image = maps[key]
+        edge = np.concatenate([image[0], image[-1], image[:, 0], image[:, -1]])
+        assert np.all(edge == 0.0), (key, inclination)
+
+
+def test_automatic_field_of_view_gives_square_pixels():
+    app = _quick_app(accuracy="fast")
+    app.inclination = 0.0  # edge-on: a much wider than tall field
+    maps = app.compute_maps()
+    dx = np.diff(maps["x"]).mean()
+    dy = np.diff(maps["y"]).mean()
+    assert dx == pytest.approx(dy, rel=0.05)
+    assert maps["I_ff_total"].shape[1] < maps["I_ff_total"].shape[0]  # fewer columns than rows
+
+
+def test_fov_option_sets_a_square_field_of_that_half_width():
+    app = _quick_app(fov=3.0, accuracy="fast")
+    maps = app.compute_maps()
+    from bowshockmaps.maps import arcsecond
+
+    half_arcsec = arcsecond(3.0 * app.get_R0_corrected(), app.distance)
+    assert maps["x"].min() == pytest.approx(-half_arcsec, rel=1e-6)
+    assert maps["x"].max() == pytest.approx(half_arcsec, rel=1e-6)
+    assert maps["y"].min() == pytest.approx(-half_arcsec, rel=1e-6)
+    assert maps["y"].max() == pytest.approx(half_arcsec, rel=1e-6)
+
+
+def _record_los_arguments(monkeypatch):
+    import bowshockmaps.maps as maps_module
+
+    seen = {}
+    real = maps_module.los_projection_vectorized
+
+    def wrapper(*args, **kwargs):
+        seen.update(zmax=kwargs["zmax"], nz=kwargs["nz"])
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(maps_module, "los_projection_vectorized", wrapper)
+    return seen
+
+
+def test_line_of_sight_range_and_steps_are_derived_by_default(monkeypatch):
+    seen = _record_los_arguments(monkeypatch)
+    app = _quick_app(accuracy="fast")
+    assert app.zmax is None and app.nz is None  # config.auto_los is on
+    app.compute_maps()
+    assert seen["nz"] % 2 == 1  # symmetric about z = 0, includes the star's plane
+    assert seen["zmax"] > 0
+
+
+def test_explicit_zmax_and_nz_are_used_exactly(monkeypatch):
+    seen = _record_los_arguments(monkeypatch)
+    app = _quick_app()
+    app.zmax = 7.0 * app.get_R0_corrected()
+    app.nz = 123
+    app.compute_maps()
+    assert seen["nz"] == 123
+    assert seen["zmax"] == pytest.approx(7.0 * app.get_R0_corrected())
+
+
+def test_higher_accuracy_uses_a_finer_line_of_sight_step(monkeypatch):
+    # BD+43 has a thin relevant layer, so the step is not pinned by the
+    # floor/ceiling and the three accuracies must be ordered.
+    seen = _record_los_arguments(monkeypatch)
+    steps = {}
+    for accuracy in ("fast", "normal", "fine"):
+        app = BowShock("BD+43", convolve=False, accuracy=accuracy)
+        app.nx = app.ny = 20
+        app.thermo_data = app.compute_thermo()
+        app.compute_maps()
+        steps[accuracy] = 2.0 * seen["zmax"] / (seen["nz"] - 1)
+    assert steps["fast"] > steps["normal"] > steps["fine"]
+    assert steps["fast"] / steps["normal"] == pytest.approx(2.0, rel=0.1)
+    assert steps["normal"] / steps["fine"] == pytest.approx(2.0, rel=0.1)
+
+
+def test_unknown_accuracy_is_rejected():
+    app = _quick_app(accuracy="ultra")
+    with pytest.raises(ValueError, match="accuracy"):
+        app.compute_maps()

@@ -103,6 +103,24 @@ Available frequencies:
         ),
     )
     parser.add_argument(
+        "--fov",
+        type=float,
+        default=None,
+        help=(
+            "Half-width of the (square) field of view, in R0 units. Default: derived "
+            "from the shell for each source and inclination."
+        ),
+    )
+    parser.add_argument(
+        "--accuracy",
+        choices=["fast", "normal", "fine"],
+        default=None,
+        help=(
+            "Line-of-sight step, as a fraction of the thickness of the thinnest layer that "
+            "matters: 1/3 (fast), 1/6 (normal) or 1/12 (fine). Default: config.accuracy."
+        ),
+    )
+    parser.add_argument(
         "--verbose",
         "-v",
         action="store_true",
@@ -144,6 +162,8 @@ def main() -> None:
             beam_fwhm=args.beam_fwhm,
             band=args.band,
             max_pixels=args.max_pixels,
+            fov=args.fov,
+            accuracy=args.accuracy,
         )
     except ValueError as e:
         parser.error(str(e))

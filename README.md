@@ -59,12 +59,32 @@ The refinement is therefore capped at `--max-pixels` (default 2000,
 treated as unresolved: a Gaussian that narrow does not change the map, which is only
 converted to per-beam units, and a warning says so.
 
-Run time (nz = 1000, one core): ~7 s for 1000 x 1000 pixels and ~35 s for
-2000 x 2000; it grows as nx*ny*nz. The line of sight is sampled in steps of
-`2*zmax/nz`, and that sampling (not the method) dominates the accuracy: at nz = 500
-the typical pixel is off by ~5% from a fine-sampling reference and ~25% of the bright
-pixels by more than 10%, at nz = 3000 the typical pixel is off by ~0.1%. Raise `nz`
-in `config.py` when you need cleaner maps.
+**Grid: field of view, line of sight, accuracy.** By default nothing about the grid
+needs tuning per system: the program derives it from the shell of each source
+(`config.auto_los = True`).
+
+* *Field of view*: the extent of the shell projected on the sky for the current
+  inclination, plus a 3% margin, with square pixels (`max(nx, ny)` pixels along the
+  longer side). A fixed `+-(6 + 2 sin^2 i) R0` is not enough in general: at
+  `max_theta = 135` the shell needs up to ~7 R0, at 160 deg up to ~26 R0. Give
+  `--fov H` (half-width in R0 units) or `config.fov` to force a square field.
+* *Line-of-sight range* `zmax`: the part of each line of sight where the shell can be.
+* *Line-of-sight step* `dz`: the integral through a layer has an error that goes as
+  `dz / thickness`, so `dz` is the thickness of the thinnest layer that matters (one
+  that carries at least 5% of the emission measure, `n^2 * volume`) divided by 3, 6 or
+  12 for `--accuracy fast|normal|fine` (default `normal`, `config.accuracy`), kept
+  within [0.0015, 0.05] R0. Measured on three systems, `normal` gives a median error of
+  ~1% in the bright pixels (~0.4%-0.9% for the continuum and for sources with thicker
+  layers; a few % for H-alpha dominated by a very thin layer) and `fine` about half.
+  `nz` follows from `dz` and `zmax`.
+
+To use fixed values instead, set `config.auto_los = False` (then `zmax` and `nz` from
+`config.py` are used) or assign `app.zmax` / `app.nz` by hand; both always win over the
+derived ones.
+
+Run time grows as nx*ny*nz, plus the building of a 2D table of emissivities whose cost
+depends on `dz` (about 30 s when the thinnest layer is ~0.014 R0). Integration alone
+takes ~7 s for 1000 x 1000 pixels with 1000 steps and ~35 s for 2000 x 2000.
 
 Without `--telescope`/`--beam-fwhm`, the convolution beam falls back to
 a placeholder (the source's projected stagnation radius) -- pass one of the two

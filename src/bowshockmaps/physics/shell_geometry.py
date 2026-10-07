@@ -104,6 +104,104 @@ class ShellGeometry:
         self._z_lo = self.C_z.min() - pad
         self._z_hi = self.C_z.max() + pad
 
+    def _envelope(self):
+        """(rho, z) [cm] of the boundary of every layer: the reverse shock
+        itself and the outer edge of each of the four layers."""
+        rho, z = [], []
+        for d in (0.0 * self.d1, self.d1, self.d2, self.d3, self.d4):
+            rho.append(self.C_rho + d * self.n_rho)
+            z.append(self.C_z + d * self.n_z)
+        return np.concatenate(rho), np.concatenate(z)
+
+    def sky_extent(self, inclination):
+        """Extent of the shell projected on the sky, in the intrinsic frame.
+
+        The shell is a surface of revolution, so a point at azimuth phi of
+        the boundary point (rho, z) is at (X, Y, Z) = (rho cos phi, rho sin
+        phi, z), and on the sky (see `los_projection_vectorized`)
+        x = ci*X - si*Z and y = Y, with ci, si the cosine and sine of the
+        inclination angle used there. Maximizing over phi gives, over the
+        boundary of the layers:
+
+            x in [min(-ci*rho - si*z), max(ci*rho - si*z)],  |y| <= max(rho).
+
+        The star (the origin) is always included.
+
+        Parameters
+        ----------
+        inclination : float
+            Inclination angle [rad], as passed to `los_projection_vectorized`.
+
+        Returns
+        -------
+        x_min, x_max, y_half : float
+            [cm]; the shell fits in x_min <= x <= x_max, |y| <= y_half.
+        """
+        ci, si = np.cos(inclination), np.sin(inclination)
+        rho, z = self._envelope()
+        x_min = min((-ci * rho - si * z).min(), 0.0)
+        x_max = max((ci * rho - si * z).max(), 0.0)
+        return x_min, x_max, rho.max()
+
+    def los_reach(self, inclination):
+        """Largest |z| along the line of sight [cm] at which the shell can be.
+
+        With z the coordinate along the line of sight, z = si*X + ci*Z, so
+        |z| <= si*rho + ci*|z_shell| over the boundary of the layers. A
+        line of sight needs only to be integrated over |z| <= this.
+        """
+        ci, si = np.cos(inclination), np.sin(inclination)
+        rho, z = self._envelope()
+        return (si * rho + ci * np.abs(z)).max()
+
+    def thinnest_layer(self, densities, min_weight=0.05):
+        """Characteristic thickness [cm] of the thinnest layer that matters.
+
+        Sets how finely the line of sight must be sampled: the error of the
+        integral through a layer goes as (step / thickness). Layers that
+        carry a negligible part of the emission must not set it (BD+43's
+        forward-shock hot layer is ~0.02 arcsec thick and irrelevant), so
+        each layer is weighted by its emission measure, the integral of
+        n^2 over its volume, and only layers with at least ``min_weight`` of
+        the total count. Sampling a layer worth less than that badly costs
+        at most that fraction of the flux, so it is not worth the (much
+        smaller) step. The thickness of a layer is its median over the part
+        of the shell where it exists (thickness > 0).
+
+        Parameters
+        ----------
+        densities : 4 arrays
+            Density [cm^-3] along the shell (like ``theta``) of the RS hot,
+            RS cold, FS cold and FS hot layers.
+        min_weight : float
+            Fraction of the total emission measure a layer needs to count
+            (default 5%).
+
+        Returns
+        -------
+        float or None
+            The thickness [cm], or None if the shell has no layers.
+        """
+        thickness = [self.d1, self.d2 - self.d1, self.d3 - self.d2, self.d4 - self.d3]
+        edges = [0.0 * self.d1, self.d1, self.d2, self.d3, self.d4]
+        dl = np.hypot(np.gradient(self.C_rho), np.gradient(self.C_z))  # arc length elements
+
+        weights = []
+        for k, (h, n) in enumerate(zip(thickness, densities)):
+            rho_mid = self.C_rho + 0.5 * (edges[k] + edges[k + 1]) * self.n_rho
+            n = np.nan_to_num(np.asarray(n, dtype=float))
+            weights.append(np.sum(2.0 * np.pi * np.abs(rho_mid) * np.maximum(h, 0.0) * n**2 * dl))
+        total = sum(weights)
+        if not total > 0:
+            return None
+
+        scales = [
+            np.median(h[h > 0])
+            for h, w in zip(thickness, weights)
+            if w >= min_weight * total and (h > 0).any()
+        ]
+        return min(scales) if scales else None
+
     @property
     def bbox(self):
         """Bounding box of the shell in the (rho, z) plane: (rho_hi, z_lo, z_hi) [cm].

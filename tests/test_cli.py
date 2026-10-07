@@ -115,3 +115,14 @@ def test_max_pixels_flag():
     parser = build_parser()
     assert parser.parse_args(["--max-pixels", "300"]).max_pixels == 300
     assert parser.parse_args([]).max_pixels is None
+
+
+def test_fov_and_accuracy_flags():
+    parser = build_parser()
+    args = parser.parse_args(["--fov", "4.5", "--accuracy", "fine"])
+    assert args.fov == 4.5
+    assert args.accuracy == "fine"
+    defaults = parser.parse_args([])
+    assert defaults.fov is None and defaults.accuracy is None
+    with pytest.raises(SystemExit):
+        parser.parse_args(["--accuracy", "ultra"])
