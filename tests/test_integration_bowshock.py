@@ -507,3 +507,27 @@ def test_regime_does_not_depend_on_the_adiabatic_velocity(monkeypatch):
     for shock in ("RS", "FS"):
         assert np.array_equal(reference[f"regime_{shock}"], altered[f"regime_{shock}"])
         assert np.allclose(reference[f"ratio_{shock}"], altered[f"ratio_{shock}"])
+
+
+def test_layer_thickness_is_continuous_where_the_forward_shock_turns_radiative():
+    # Regression test. Wind of 500 km/s: the forward shock turns radiative at
+    # ~109 deg. The adiabatic thickness (v_adv, adiabatic density) and the radiative
+    # one (v_tan, strong-shock density) used to disagree by a factor ~2 there, so
+    # H_total/R halved (x0.49) from one angle to the next. It is now continuous.
+    d = _thermo("RXJ0528+2838", Vw=500.0, Vstar=128.5, n_ism=0.2, log_mdot=-9.0)
+    radiative = np.asarray(d["regime_FS"]) == "radiative"
+    i = int(np.argmax(radiative))  # first radiative angle
+    jump = d["H_FS_total"][i] / d["H_FS_total"][i - 1]
+    assert 0.9 < jump < 1.1
+
+
+def test_adiabatic_thickness_is_pure_bernoulli_far_from_the_transition(monkeypatch):
+    # BD+43's reverse shock is adiabatic with a cooling length ~1e6 times the width
+    # of the region, so the blend must leave its thickness untouched: the same as
+    # with cooling switched off altogether (infinite cooling time, weight 0).
+    import bowshockmaps.physics.thermodynamics as thermodynamics
+
+    reference = _thermo("BD+43")["H_RS_hot"]
+    monkeypatch.setattr(thermodynamics, "cooling_time", lambda n, T: np.full_like(n, 1e99))
+    no_cooling = _thermo("BD+43")["H_RS_hot"]
+    assert np.allclose(reference, no_cooling, rtol=1e-6, equal_nan=True)

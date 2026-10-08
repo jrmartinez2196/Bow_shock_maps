@@ -386,6 +386,57 @@ def vadv(thr, rr, R0_phys, v_perp, comp, t_cool, v_pre, P_adi, rho_adi0):
 # ============================================================
 
 
+def blend_adiabatic_thickness(H_ad, W, l_cool):
+    """
+    Adiabatic layer thickness, made continuous with the radiative one at the
+    transition between the two regimes.
+
+    The adiabatic thickness H_ad is set by Bernoulli's flow speed v_adv and the
+    adiabatic density; the radiative one by the kinematic speed v_tan and the
+    strong-shock density, and equals W where the cooling length l_cool equals W
+    (the cold layer is then zero and the hot layer fills the region). The two
+    mass accountings differ by a factor of order 1-2, so switching regime at
+    l_cool = W made the thickness jump (x0.49 for the forward shock of RXJ0528+2838
+    at V_wind = 500 km/s).
+
+    Far from the transition (l_cool >> W) the gas is adiabatic and Bernoulli
+    holds, so H_ad is kept. Approaching it, the thickness is interpolated
+    geometrically towards W:
+
+        H = H_ad**(1 - w) * W**w,    w = min(1, W / l_cool)**2
+
+    w is 1 at the transition (continuity) and falls to 0 quickly away from it.
+    The form of the weight is a modeling choice, not derived: any w with w(1) = 1
+    that decays gives continuity; the square keeps the correction local (the
+    first power also changed angles that are only marginally adiabatic by
+    factors of up to 2).
+
+    Parameters
+    ----------
+    H_ad : float or array
+        Adiabatic thickness, from mass conservation with v_adv.
+    W : float or array
+        Width of the shocked region from mass conservation with v_tan and the
+        strong-shock density (same units as H_ad).
+    l_cool : float or array
+        Cooling length, (v_perp / compression) * t_cool (same units).
+
+    Returns
+    -------
+    float or array
+        The blended thickness. H_ad where W, l_cool or H_ad are not positive and
+        finite (there is nothing to blend with).
+    """
+    H_ad = np.asarray(H_ad, dtype=float)
+    W = np.asarray(W, dtype=float)
+    l_cool = np.asarray(l_cool, dtype=float)
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        w = np.clip(W / l_cool, 0.0, 1.0) ** 2
+        blended = H_ad ** (1.0 - w) * W**w
+    valid = np.isfinite(w) & np.isfinite(blended) & (W > 0) & (H_ad > 0) & (l_cool > 0)
+    return np.where(valid, blended, H_ad)
+
+
 def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     """
     Calculate post-shock conditions for forward or reverse shock.
@@ -427,7 +478,9 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     regime : ndarray of str
         'radiative' or 'adiabatic' for each theta
     H_hot : ndarray
-        Hot layer thickness [cm] (post-shock layer)
+        Hot layer thickness [cm] (post-shock layer). Radiative: the cooling
+        length. Adiabatic: from mass conservation with v_adv, blended towards the
+        radiative width near the transition (blend_adiabatic_thickness).
     H_cold : ndarray
         Cold recombination layer thickness [cm] (0 for adiabatic)
     H_total : ndarray
@@ -668,7 +721,9 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
 
             denominator = 2.0 * np.pi * R_phys[i] * np.sin(thr[i]) * v_adv[i] * rho_post[i]
 
-            H_hot[i] = dot_M[i] / denominator
+            # Bernoulli-based thickness, made continuous with the radiative one
+            # at the transition (see blend_adiabatic_thickness).
+            H_hot[i] = blend_adiabatic_thickness(dot_M[i] / denominator, W[i], H_hot_rad[i])
             H_cold[i] = 0.0
 
     # Total thickness = hot layer + cold layer
