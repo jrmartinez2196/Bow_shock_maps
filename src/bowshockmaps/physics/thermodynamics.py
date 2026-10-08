@@ -435,12 +435,11 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     t_cool : ndarray
         Post-shock thermal cooling timescale
     t_adv : ndarray
-        Time the gas takes to cross the shocked layer it would form if the
-        shock were adiabatic: H_ad / (v_perp / compression), with H_ad from mass
-        conservation. An angle is radiative if t_cool < t_adv, i.e. if the
-        cooling length is shorter than that layer. NaN where no adiabatic flow
-        exists (the Bernoulli energy cannot be satisfied); those angles are
-        radiative.
+        Advection time: the time the tangential flow (speed v_tan) takes to
+        remove the mass the shock has accumulated, dot_M / (2 pi R sin(theta)
+        v_tan rho_pre v_perp). An angle is radiative if t_cool < t_adv, i.e.
+        if the cooling length is shorter than the width of the shocked
+        region.
     """
 
     R_phys = rr * R0_phys
@@ -451,6 +450,7 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     T_pre = np.zeros(n_points)
     P_pre = np.zeros(n_points)
     cs_pre = np.zeros(n_points)
+    cs_post = np.zeros(n_points)
     v_adv = np.zeros(n_points)
 
     rho_adi = np.zeros(n_points)
@@ -512,6 +512,16 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     rho_adi[0] = gamma_ad / (gamma_ad - 1.0) * 2.0 * P_adi[0] / v_pre**2.0
 
     # Cooling time and flow speeds.
+    #
+    # v_t (tangential velocity, purely kinematic from the pre-shock flow
+    # geometry) is regime-independent: it only assumes the tangential
+    # velocity component is continuous across the shock, which holds
+    # whether the shocked gas cools or not. v_adv (Bernoulli-derived)
+    # explicitly assumes adiabatic (energy-conserving) flow, so it is
+    # only physically valid *after* we already know the shock is
+    # adiabatic. Using v_adv to decide the regime would be circular, so
+    # the regime is decided with v_t, and v_adv is reserved for the
+    # quantities computed within the adiabatic branch below.
     t_cool = cooling_time(n_RH, T_RH)
     v_t = vtan(thr, rr, lam, shock, kwargs.get("Vw"), kwargs.get("Vstar"))
     v_adv = vadv(thr, rr, R0_phys, v_perp, comp, t_cool, v_pre, P_adi, rho_adi[0])
@@ -526,83 +536,49 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     dot_M = np.cumsum(dM)
 
     # ------------------------------------------------------------------
-    # The adiabatic solution at every angle, as if no angle radiated.
+    # Regime: radiative if the gas cools within the shocked region, i.e. if the
+    # cooling length l_cool = (v_perp/compression) * t_cool is shorter than the
+    # width W of that region.
     #
-    # It is what the shocked layer would be if the shock were adiabatic, and is
-    # the yardstick the cooling is compared with to decide the regime (assume
-    # adiabatic, check whether that is self-consistent). It is also the final
-    # solution at the angles that turn out adiabatic. Computing it for all
-    # angles first keeps it independent of the regime at the other angles.
-    P_ad = np.zeros(n_points)
-    rho_ad = np.zeros(n_points)
-    P_ad[0] = P_adi[0]
-    rho_ad[0] = rho_adi[0]
-    supersonic = False
-    v_perp_crit = None
-    for i in range(1, n_points):
-        if not supersonic:
-            P_ad[i] = P_adi[i]
-            rho_ad[i] = rho_ad[i - 1] * (P_ad[i] / P_ad[i - 1]) ** (1.0 / gamma_ad)
-            if v_adv[i] >= np.sqrt(gamma_ad * P_ad[i] / rho_ad[i]):
-                supersonic = True
-                v_perp_crit = v_perp[i]
-        else:
-            P_ad[i] = P_adi[i] * (v_perp[i] / v_perp_crit)
-            rho_ad[i] = rho_ad[i - 1] * (P_ad[i] / P_ad[i - 1]) ** (1.0 / gamma_ad)
-
-    # Thickness of the layer if adiabatic, from mass conservation.
+    # W is the width mass conservation gives the region if the gas stays at the
+    # strong-shock density rho_RH, flowing along the surface at v_t:
+    #
+    #     dot_M = 2 pi R sin(theta) * v_t * rho_RH * W
+    #
+    # and uses no energy conservation, so it does not presuppose the regime.
+    # Equivalently t_cool < t_adv, with
+    #
+    #     t_adv = W * compression / v_perp = dot_M / (2 pi R sin(theta) v_t rho_pre v_perp)
+    #
+    # the time it takes the tangential flow to remove the mass accumulated by
+    # the shock (the mean residence time of the gas in the region).
+    #
+    # Unlike R/v_tan (an earlier choice of t_adv), W is finite on the symmetry
+    # axis: dot_M ~ theta^2 and sin(theta) * v_t ~ theta^2 there. R/v_tan
+    # diverges, so every angle near the axis was "radiative" even when the
+    # cooling length exceeded the radius (H_hot/R ~ 1 and a cold layer of
+    # negative thickness for V_wind = 100 km/s, RXJ0528+2838 parameters).
     with np.errstate(divide="ignore", invalid="ignore"):
-        H_ad = dot_M / (2.0 * np.pi * R_phys * np.sin(thr) * v_adv * rho_ad)
-
-    # ------------------------------------------------------------------
-    # Regime: radiative if the gas cools within its layer, i.e. if the cooling
-    # length l_cool = (v_perp/compression) * t_cool is shorter than the layer
-    # thickness it would have if adiabatic, H_ad. Equivalently t_cool < t_adv,
-    # with t_adv = H_ad / (v_perp/compression) the time the gas takes to cross
-    # that layer at its post-shock speed.
-    #
-    # (An earlier version compared t_cool with R/v_tan. That is not the time a
-    # parcel spends in its layer: it diverges at the symmetry axis, where
-    # v_tan -> 0, so every angle there was "radiative" even when the cooling
-    # length exceeded the radius -- a hot layer H/R ~ 1 and a cold layer of
-    # negative thickness for V_wind = 100 km/s.)
-    #
-    # Where the Bernoulli energy cannot be satisfied (v_adv is NaN: no adiabatic
-    # flow exists there) the gas cannot be adiabatic, so t_adv is NaN and the
-    # comparison below classifies it as radiative.
-    t_adv = H_ad * comp / v_perp
-
-    # The first angle is the symmetry axis itself (theta ~ 1e-6), a stagnation
-    # point: v_adv -> 0 (the Bernoulli argument is zero up to rounding, and
-    # rounds to a tiny negative -- NaN -- some of the time) and H_ad is 0/0.
-    # Neither tells anything about the physics, so the axis takes the time (and
-    # hence the regime) of its neighbor, which is a regular point.
-    if n_points > 1:
-        t_adv[0] = t_adv[1]
-    is_radiative = ~(t_cool >= t_adv)
+        W = dot_M / (2.0 * np.pi * R_phys * np.sin(thr) * v_t * rho_RH)
+    t_adv = W * comp / v_perp
+    is_radiative = t_cool < t_adv  # NaN compares False: adiabatic
 
     # Layer thicknesses if the shock is radiative.
     #
     # Hot layer: the cooling length. Cold layer: from mass conservation, what
-    # the accumulated mass leaves once the hot layer has taken its share. v_t
-    # (not v_adv) is the physically appropriate flow speed for the cold layer:
-    # v_adv assumes adiabatic (energy-conserving) flow, which no longer holds
-    # once the gas has radiated energy away.
+    # the accumulated mass leaves once the hot layer has taken its share, with
+    # v_t as above:
+    #
+    #     H_cold = dot_M / (2 pi R sin(theta) v_t rho_cold) - H_hot * rho_RH / rho_cold
+    #            = (rho_RH / rho_cold) * (W - l_cool)
+    #
+    # so H_cold >= 0 exactly where the regime is radiative (l_cool < W): the cold
+    # layer starts at zero thickness at the transition and grows from there.
     rho_cold_rad = n_RH * (T_RH / T_IL) * mu_sh * mp
     H_hot_rad = (v_perp / comp) * t_cool
     denominator_rad = 2.0 * np.pi * R_phys * np.sin(thr) * v_t * rho_cold_rad
     with np.errstate(divide="ignore", invalid="ignore"):
         H_cold_rad = dot_M / denominator_rad - H_hot_rad * (rho_RH / rho_cold_rad)
-
-    # The regime above compares the cooling length with the layer thickness
-    # computed with v_adv and rho_ad; the cold layer here uses v_tan and the
-    # cold density. Near the transition (cooling length slightly shorter than
-    # the layer) the two mass accountings differ by a few percent, which can
-    # leave the cold layer marginally negative: |H_cold| is 1-5% of H_hot there
-    # (RXJ0528+2838 forward shock, V_wind = 100 and 500 km/s). It is not a
-    # physical thickness, so it is floored at zero: the hot layer is then all of
-    # the shocked layer, and mass is conserved to within that few percent.
-    H_cold_rad = np.where(np.isfinite(H_cold_rad), np.maximum(H_cold_rad, 0.0), 0.0)
 
     # Initialize outputs
     n_post = np.zeros(n_points)
@@ -610,18 +586,48 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
     n_rec = np.zeros(n_points)
     T_rec = np.zeros(n_points)
     P_post = np.zeros(n_points)
+    cs_post = np.zeros(n_points)
     rho_post = np.zeros(n_points)
     H_hot = np.zeros(n_points)
     H_cold = np.zeros(n_points)
     H_total = np.zeros(n_points)
     regime = np.array(["adiabatic"] * n_points, dtype=object)
 
-    for i in range(n_points):
+    if is_radiative[0]:
+        regime[0] = "radiative"
+        rho_post[0] = rho_RH[0]
+        P_post[0] = P_RH[0]
+        T_post[0] = T_RH[0]
+        n_post[0] = n_RH[0]
+        n_rec[0] = n_RH[0] * (T_RH[0] / T_IL)
+        T_rec[0] = T_IL
+    else:
+        rho_post[0] = rho_adi[0]
+        P_post[0] = P_adi[0]
+        T_post[0] = P_post[0] * mp * mu_sh / rho_post[0] / kB
+        n_post[0] = rho_post[0] / (mu_sh * mp)
+        n_rec[0] = n_post[0]
+        T_rec[0] = T_post[0]
+
+    cs_post[0] = np.sqrt(gamma_ad * P_post[0] / rho_post[0])
+
+    supersonic = False
+    v_perp_crit = None
+
+    for i in range(1, n_points):
+
         if is_radiative[i]:
             regime[i] = "radiative"
 
             rho_post[i] = rho_RH[i]
             P_post[i] = P_RH[i]
+            cs_post[i] = np.sqrt(gamma_ad * P_post[i] / rho_post[i])
+
+            if not supersonic:
+                if v_adv[i] >= cs_post[i]:
+                    supersonic = True
+                    v_perp_crit = v_perp[i]
+
             n_post[i] = n_RH[i]
             T_post[i] = T_RH[i]
 
@@ -629,23 +635,41 @@ def post_shock_conditions(thr, rr, shock, R0_phys, T_IL=8e3, **kwargs):
             n_rec[i] = n_RH[i] * (T_RH[i] / T_IL)
             T_rec[i] = T_IL
 
-            if i > 0:  # thicknesses of the first point are set by the axis cutoff below
-                H_hot[i] = H_hot_rad[i]
-                H_cold[i] = H_cold_rad[i]
+            # Hot layer: cooling layer (post-shock); cold layer: from mass
+            # conservation (see above; non-negative by construction here).
+            H_hot[i] = H_hot_rad[i]
+            H_cold[i] = H_cold_rad[i]
 
         else:
             # Adiabatic: only hot layer, cold layer = hot layer (no recombination)
-            rho_post[i] = rho_ad[i]
-            P_post[i] = P_ad[i]
+            regime[i] = "adiabatic"
+
+            if not supersonic:
+
+                P_post[i] = P_adi[i]
+                rho_post[i] = rho_post[i - 1] * (P_post[i] / P_post[i - 1]) ** (1.0 / gamma_ad)
+                cs_post[i] = np.sqrt(gamma_ad * P_post[i] / rho_post[i])
+
+                if v_adv[i] >= cs_post[i]:
+                    supersonic = True
+                    v_perp_crit = v_perp[i]
+
+            else:
+                P_post[i] = P_adi[i] * (v_perp[i] / v_perp_crit)
+                rho_post[i] = rho_post[i - 1] * (P_post[i] / P_post[i - 1]) ** (1.0 / gamma_ad)
+                cs_post[i] = np.sqrt(gamma_ad * P_post[i] / rho_post[i])
+
             n_post[i] = rho_post[i] / (mu_sh * mp)
             T_post[i] = P_post[i] * mp * mu_sh / rho_post[i] / kB
 
+            # Cold layer = hot layer
             n_rec[i] = n_post[i]
             T_rec[i] = T_post[i]
 
-            if i > 0:
-                H_hot[i] = H_ad[i]
-                H_cold[i] = 0.0
+            denominator = 2.0 * np.pi * R_phys[i] * np.sin(thr[i]) * v_adv[i] * rho_post[i]
+
+            H_hot[i] = dot_M[i] / denominator
+            H_cold[i] = 0.0
 
     # Total thickness = hot layer + cold layer
     H_total = H_hot + H_cold

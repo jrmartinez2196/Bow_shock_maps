@@ -443,9 +443,10 @@ def test_layers_are_physical_across_the_parameter_range(source, Vw, Vstar, n_ism
 def test_regime_has_no_singularity_at_the_symmetry_axis():
     # The regime used to be t_cool < R/v_tan, which diverges where v_tan -> 0
     # (the axis): every angle there was "radiative" whatever the shock, with a
-    # cooling layer of ~1 R. Now it compares with the thickness of the layer
-    # the gas would form if adiabatic, which is finite at the axis, so the apex
-    # is radiative or adiabatic according to the physics.
+    # cooling layer of ~1 R. Now the cooling length is compared with the width W
+    # of the shocked region, W = dot_M / (2 pi R sin(theta) v_tan rho_RH), which
+    # is finite at the axis (dot_M ~ theta^2 and sin(theta) v_tan ~ theta^2), so
+    # the apex is radiative or adiabatic according to the physics.
     # A fast, tenuous wind (cooling length >> layer): adiabatic at the apex.
     hot = _thermo("RXJ0528+2838", Vw=3000.0, Vstar=128.5, n_ism=0.2, log_mdot=-8.0)
     assert hot["regime_RS"][0] == "adiabatic"
@@ -459,29 +460,50 @@ def test_regime_has_no_singularity_at_the_symmetry_axis():
     assert 0.0 < cool["H_FS_total"][0] < 0.3
 
 
-def test_forward_shock_cold_layer_appears_where_the_cooling_length_drops_below_the_layer():
+def test_forward_shock_cold_layer_appears_where_the_cooling_length_drops_below_the_width():
     # Wind of 500 km/s, v_star = 128.5 km/s, n_ISM = 0.2, Mdot = 1e-9: the
     # reverse shock is adiabatic everywhere (its cooling length is ~4e4 times the
-    # layer) and the forward shock turns radiative at ~96 deg, where
-    # l_cool/H_ad crosses 1.
+    # width of the region) and the forward shock turns radiative at ~109 deg,
+    # where l_cool / W crosses 1.
     d = _thermo("RXJ0528+2838", Vw=500.0, Vstar=128.5, n_ism=0.2, log_mdot=-9.0)
     theta = np.degrees(BowShock("RXJ0528+2838", convolve=False).theta_grid)
     assert np.all(np.asarray(d["regime_RS"]) == "adiabatic")
     radiative = np.asarray(d["regime_FS"]) == "radiative"
     assert radiative.any() and not radiative[0]
     onset = theta[np.argmax(radiative)]
-    assert onset == pytest.approx(96.0, abs=2.0)
+    assert onset == pytest.approx(109.0, abs=2.0)
     assert np.all(radiative[np.argmax(radiative) :])  # and it stays radiative beyond
     _assert_regime_is_cooling_vs_advection(d, "FS")
 
 
-def test_transition_to_radiative_leaves_a_nonnegative_cold_layer():
-    # Near the transition the cold layer from mass conservation (which uses v_tan)
-    # can come out marginally negative (1-5% of the hot layer) because the regime
-    # is decided with the adiabatic layer (v_adv); it is floored at zero. The hot
-    # layer is then the whole shocked layer.
+def test_cold_layer_is_nonnegative_by_construction_and_starts_at_zero():
+    # In the radiative branch H_cold = (rho_RH / rho_cold) * (W - l_cool), so
+    # l_cool < W (the regime criterion) is exactly H_cold >= 0: no floor is needed,
+    # and the cold layer starts from ~zero thickness at the transition.
     d = _thermo("RXJ0528+2838", Vw=500.0, Vstar=128.5, n_ism=0.2, log_mdot=-9.0)
     radiative = np.asarray(d["regime_FS"]) == "radiative"
-    assert _all_nonnegative(d["H_FS_cold"])
+    cold = np.asarray(d["H_FS_cold"], dtype=float)
+    assert np.all(cold[radiative] >= 0.0)  # strictly: no clipping anywhere
+    first = np.argmax(radiative)
+    assert cold[first] < 0.05 * d["H_FS_hot"][first]  # continuous at the transition
     assert np.all(d["H_FS_hot"][radiative] > 0.0)
     assert np.allclose(d["H_FS_total"], d["H_FS_hot"] + np.nan_to_num(d["H_FS_cold"]))
+
+
+def test_regime_does_not_depend_on_the_adiabatic_velocity(monkeypatch):
+    # v_adv comes from Bernoulli (energy conservation), which presupposes an
+    # adiabatic flow, so using it to decide whether the gas is adiabatic would be
+    # circular. The regime must therefore be the same whatever v_adv is.
+    import bowshockmaps.physics.thermodynamics as thermodynamics
+
+    params = dict(Vw=500.0, Vstar=128.5, n_ism=0.2, log_mdot=-9.0)
+    reference = _thermo("RXJ0528+2838", **params)
+
+    monkeypatch.setattr(
+        thermodynamics, "vadv", lambda thr, *args, **kwargs: np.full_like(thr, 3.0e6)
+    )
+    altered = _thermo("RXJ0528+2838", **params)
+
+    for shock in ("RS", "FS"):
+        assert np.array_equal(reference[f"regime_{shock}"], altered[f"regime_{shock}"])
+        assert np.allclose(reference[f"ratio_{shock}"], altered[f"ratio_{shock}"])
