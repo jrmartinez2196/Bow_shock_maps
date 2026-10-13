@@ -96,6 +96,21 @@ class BowShock:
         # Magnetic field
         self.f_B = self.params.get("f_B", 0.1)
 
+        # Balmer-dominated H-alpha of the forward shock (neutral ISM outside
+        # the Stromgren sphere): photons per neutral H, and pre-shock
+        # ionization fraction of the ISM
+        self.balmer_eta = self.params.get("balmer_eta", 0.3)
+        self.x_ion_ism = self.params.get("x_ion_ism", 0.08)
+
+        # Thermal dust of the forward shock: wavelength of the map [um], grain
+        # radius [um], dust-to-gas mass ratio and luminosity of the star that
+        # heats the grains [erg/s] (collisional heating is always included)
+        self.dust_lambda_um = self.params.get("dust_lambda_um", 4.6)
+        self.a_dust_um = self.params.get("a_dust_um", 0.1)
+        self.f_dust_gas = self.params.get("f_dust_gas", 0.01)
+        self.L_star = self.params.get("L_star", 1e32)
+        self.f_uv_shock = self.params.get("f_uv_shock", 1.0)
+
         logger.info(f"Loaded parameters for {source_name}")
         logger.info(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
         logger.info(f"  Vw = {self.Vw/1e5:.1f} km/s")
@@ -538,6 +553,13 @@ class BowShock:
             p_inj=self.p_inj,
             f_B=self.f_B,
             R_stromgren=R_str,
+            balmer_eta=self.balmer_eta,
+            x_ion_ism=self.x_ion_ism,
+            dust_lambda_um=self.dust_lambda_um,
+            a_dust_um=self.a_dust_um,
+            f_dust_gas=self.f_dust_gas,
+            L_star=self.L_star,
+            f_uv_shock=self.f_uv_shock,
             nu_ff=self.nu_ff,
             max_pixels=self.max_pixels,
             accuracy=self.accuracy,
@@ -556,6 +578,8 @@ class BowShock:
             "I_syn_mJy": result["I_syn_mJy"],
             "I_continuum_total": result["I_continuum_total"],
             "I_continuum_mJy": result["I_continuum_mJy"],
+            "I_dust_MJy_sr": result["I_dust_MJy_sr"],
+            "I_dust_mJy": result["I_dust_mJy"],
         }
 
     # ==========================================================
@@ -651,7 +675,7 @@ class BowShock:
         self.fig2 = plt.figure(figsize=(15, 16))
         self.fig2.suptitle("Emission Maps and Radial Profiles", fontsize=16)
 
-        map_keys = ["Halpha", "OIII", "continuum", "ff", "syn"]
+        map_keys = ["Halpha", "OIII", "continuum", "ff", "syn", "dust"]
         self.star_markers = {key: None for key in map_keys}
         self.arrows = {key: None for key in map_keys}
 
@@ -663,6 +687,7 @@ class BowShock:
         ax_cont = self.fig2.add_subplot(3, 3, 3)
         ax_ff = self.fig2.add_subplot(3, 3, 4)
         ax_syn = self.fig2.add_subplot(3, 3, 5)
+        ax_dust = self.fig2.add_subplot(3, 3, 6)
 
         # Contour levels
         self.contours = {key: None for key in map_keys}
@@ -670,13 +695,14 @@ class BowShock:
         # Bottom row: radial profiles
         ax_radial_profiles = self.fig2.add_subplot(3, 3, (7, 9))
 
-        map_axes = [ax_Halpha, ax_OIII, ax_cont, ax_ff, ax_syn]
+        map_axes = [ax_Halpha, ax_OIII, ax_cont, ax_ff, ax_syn, ax_dust]
         map_titles = [
             r"H$\alpha$",
             "[O III]",
             "Free-free + synchrotron",
             "Free-free",
             "Synchrotron",
+            f"Dust ({self.dust_lambda_um:g} \u03bcm)",
         ]
 
         # Configure map axes
@@ -959,7 +985,9 @@ class BowShock:
             x_star = 0.0
             y_star = 0.0
 
-            data_list = [I_Halpha, I_OIII, I_continuum, I_ff, I_syn]
+            I_dust = sanitize_log_data(maps["I_dust_MJy_sr"])
+
+            data_list = [I_Halpha, I_OIII, I_continuum, I_ff, I_syn, I_dust]
             keys = self.fig2_axes["map_keys"]
 
             for i, (key, I_data) in enumerate(zip(keys, data_list)):

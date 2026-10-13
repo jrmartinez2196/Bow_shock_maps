@@ -206,6 +206,10 @@ def update_map_image(ax, key, I_data, extent, images, colorbars, band_name, PA):
 
             cbar_label = r"Surface brightness [mJy beam$^{-1}$]"
 
+        elif key == "dust":
+
+            cbar_label = r"Surface brightness [MJy sr$^{-1}$]"
+
         elif key == "Halpha":
 
             cbar_label = r"Surface brightness [R]"

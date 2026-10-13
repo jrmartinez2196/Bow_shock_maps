@@ -67,6 +67,13 @@ def load_params_from_file(filename):
         "f_NTp",
         "f_NTe",
         "f_B",
+        "balmer_eta",
+        "x_ion_ism",
+        "dust_lambda_um",
+        "a_dust_um",
+        "f_dust_gas",
+        "L_star",
+        "f_uv_shock",
     ]
     for key in numeric_keys:
         if key in params:

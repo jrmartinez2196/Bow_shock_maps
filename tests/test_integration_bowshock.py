@@ -67,7 +67,7 @@ def test_compute_maps_includes_continuum_and_components():
     )
 
 
-def test_figure2_renders_all_five_map_panels():
+def test_figure2_renders_all_map_panels():
     app = BowShock("RXJ0528+2838", convolve=False)
     app.nx, app.ny, app.nz = 15, 15, 100
 
@@ -76,8 +76,8 @@ def test_figure2_renders_all_five_map_panels():
     app.create_figure2()
     app.update_figure2()
 
-    assert app.fig2_axes["map_keys"] == ["Halpha", "OIII", "continuum", "ff", "syn"]
-    assert len(app.fig2_axes["maps"]) == 5
+    assert app.fig2_axes["map_keys"] == ["Halpha", "OIII", "continuum", "ff", "syn", "dust"]
+    assert len(app.fig2_axes["maps"]) == 6
     for key in app.fig2_axes["map_keys"]:
         assert app.images[key] is not None
 
@@ -531,3 +531,4 @@ def test_adiabatic_thickness_is_pure_bernoulli_far_from_the_transition(monkeypat
     monkeypatch.setattr(thermodynamics, "cooling_time", lambda n, T: np.full_like(n, 1e99))
     no_cooling = _thermo("BD+43")["H_RS_hot"]
     assert np.allclose(reference, no_cooling, rtol=1e-6, equal_nan=True)
+
