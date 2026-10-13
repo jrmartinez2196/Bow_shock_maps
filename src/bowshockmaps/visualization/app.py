@@ -102,6 +102,15 @@ class BowShock:
         self.balmer_eta = self.params.get("balmer_eta", 0.3)
         self.x_ion_ism = self.params.get("x_ion_ism", 0.08)
 
+        # Thermal dust of the forward shock: wavelength of the map [um], grain
+        # radius [um], dust-to-gas mass ratio and luminosity of the star that
+        # heats the grains [erg/s] (collisional heating is always included)
+        self.dust_lambda_um = self.params.get("dust_lambda_um", 4.6)
+        self.a_dust_um = self.params.get("a_dust_um", 0.1)
+        self.f_dust_gas = self.params.get("f_dust_gas", 0.01)
+        self.L_star = self.params.get("L_star", 1e32)
+        self.f_uv_shock = self.params.get("f_uv_shock", 1.0)
+
         logger.info(f"Loaded parameters for {source_name}")
         logger.info(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
         logger.info(f"  Vw = {self.Vw/1e5:.1f} km/s")
@@ -546,6 +555,11 @@ class BowShock:
             R_stromgren=R_str,
             balmer_eta=self.balmer_eta,
             x_ion_ism=self.x_ion_ism,
+            dust_lambda_um=self.dust_lambda_um,
+            a_dust_um=self.a_dust_um,
+            f_dust_gas=self.f_dust_gas,
+            L_star=self.L_star,
+            f_uv_shock=self.f_uv_shock,
             nu_ff=self.nu_ff,
             max_pixels=self.max_pixels,
             accuracy=self.accuracy,
@@ -564,6 +578,8 @@ class BowShock:
             "I_syn_mJy": result["I_syn_mJy"],
             "I_continuum_total": result["I_continuum_total"],
             "I_continuum_mJy": result["I_continuum_mJy"],
+            "I_dust_MJy_sr": result["I_dust_MJy_sr"],
+            "I_dust_mJy": result["I_dust_mJy"],
         }
 
     # ==========================================================

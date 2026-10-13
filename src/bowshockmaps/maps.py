@@ -9,10 +9,13 @@ from scipy.interpolate import RegularGridInterpolator, interp1d
 from scipy.ndimage import gaussian_filter
 
 from bowshockmaps.constants import AU, eV, gamma_ad
+from bowshockmaps.constants import c as c_light
+from bowshockmaps.constants import sr_per_arcsec2
 from bowshockmaps.paths import IONIZATION_TABLE_FILE
 from bowshockmaps.physics.bow_shock_surface import integrate_r_theta_christie
 from bowshockmaps.physics.ionization import IonizationTable
 from bowshockmaps.physics.normalization import k0_e, k0_p
+from bowshockmaps.physics.dust import dust_emissivity, shock_radiated_luminosity
 from bowshockmaps.physics.radiation import (
     balmer_ionization_length,
     balmer_photon_flux,
@@ -312,6 +315,12 @@ def make_projection_maps(
     R_stromgren=3.086e17,
     balmer_eta=0.3,
     x_ion_ism=0.08,
+    dust=True,
+    dust_lambda_um=4.6,
+    a_dust_um=0.1,
+    f_dust_gas=0.01,
+    L_star=1e32,
+    f_uv_shock=1.0,
     nu_ff=2e6 * 1e9,
     distance=224.0,
     convolve=True,
@@ -381,6 +390,20 @@ def make_projection_maps(
         (Balmer-dominated emission); 0 switches it off.
     x_ion_ism : float
         Ionization fraction of the pre-shock ISM outside the Stromgren sphere.
+    dust : bool
+        Compute the thermal infrared emission of the dust of the forward-shock
+        layers (see `bowshockmaps.physics.dust`); adds I_dust_MJy_sr and
+        I_dust_mJy to the result.
+    dust_lambda_um : float
+        Wavelength [um] of the dust map (default 4.6, WISE W2).
+    a_dust_um, f_dust_gas : float
+        Grain radius [um] and dust-to-gas mass ratio.
+    L_star : float
+        Luminosity of the star [erg/s] that heats the grains.
+    f_uv_shock : float
+        Fraction of the power radiated by the shocks that heats the grains
+        (a third heating source, besides the star and the gas collisions;
+        1 = all of it, 0 = none). See `shock_radiated_luminosity`.
     nu_ff : float
         Frequency for free-free emission [Hz]
     distance : float
@@ -403,7 +426,8 @@ def make_projection_maps(
         Coordinate grids [arcsec]
     result : dict
         Emission maps: I_Halpha, I_OIII, I_ff_total, I_ff_mJy, I_syn_total,
-        I_syn_mJy, I_continuum_total (I_ff_total+I_syn_total), I_continuum_mJy
+        I_syn_mJy, I_continuum_total (I_ff_total+I_syn_total), I_continuum_mJy,
+        I_dust_MJy_sr, I_dust_mJy (thermal dust of the forward shock)
     """
 
     logger.info(f"Beam size: {fwhm_x:.3g} arcsec")
@@ -458,6 +482,17 @@ def make_projection_maps(
         H_FS_cold=fs_props["H_cold"](theta_arc),
         H_FS_hot=fs_props["H_hot"](theta_arc),
     )
+
+    # Power radiated by the shocks: a heating source of the dust, besides the
+    # star (see `bowshockmaps.physics.dust`)
+    L_shock = shock_radiated_luminosity(shell, rs_props, fs_props)["total"] if dust else 0.0
+    if dust:
+        logger.info(
+            "Radiated power of the shocks: %.3g erg/s (dust heating: star %.3g, shocks %.3g)",
+            L_shock,
+            L_star,
+            f_uv_shock * L_shock,
+        )
 
     # ==========================================================
     # Grid derived from the shell: field of view, line-of-sight range and step.
@@ -585,6 +620,11 @@ def make_projection_maps(
         n_ism=n_ism,
         balmer_eta=balmer_eta,
         x_ion_ism=x_ion_ism,
+        dust=dust,
+        dust_lambda_um=dust_lambda_um,
+        a_dust_um=a_dust_um,
+        f_dust_gas=f_dust_gas,
+        L_star=L_star + f_uv_shock * L_shock,
         f_NTp=f_NTp,
         f_NTe=f_NTe,
         p_inj=p_inj,
@@ -619,6 +659,11 @@ def los_projection_vectorized(
     n_ism=None,
     balmer_eta=0.3,
     x_ion_ism=0.08,
+    dust=True,
+    dust_lambda_um=4.6,
+    a_dust_um=0.1,
+    f_dust_gas=0.01,
+    L_star=1e32,
     f_NTp=0.1,
     f_NTe=0.01,
     p_inj=2.5,
@@ -681,6 +726,16 @@ def los_projection_vectorized(
         (Balmer-dominated emission); 0 switches it off.
     x_ion_ism : float
         Ionization fraction of the pre-shock ISM outside the Stromgren sphere.
+    dust : bool
+        Compute the thermal infrared emission of the dust of the forward-shock
+        layers (see `bowshockmaps.physics.dust`); adds I_dust_MJy_sr and
+        I_dust_mJy to the result.
+    dust_lambda_um : float
+        Wavelength [um] of the dust map (default 4.6, WISE W2).
+    a_dust_um, f_dust_gas : float
+        Grain radius [um] and dust-to-gas mass ratio.
+    L_star : float
+        Luminosity of the star [erg/s] that heats the grains.
     nu_ff : float
         Frequency for free-free emission [Hz]
 
@@ -780,13 +835,17 @@ def los_projection_vectorized(
         N_balmer = balmer_photon_flux(n_ism, x_ion_ism, v_perp_FS, balmer_eta)
         l_balmer = balmer_ionization_length(n_post_FS, T_post_FS, v_perp_FS)
 
-    def layer_emissivity(n, T, r_pt, k0e=None, B_avg=None):
+    # Frequency of the dust map [Hz]
+    nu_dust = c_light / (dust_lambda_um * 1e-4)
+
+    def layer_emissivity(n, T, r_pt, k0e=None, B_avg=None, dust_layer=False):
         """Emissivities (per unit length) of gas in a layer with density
         `n` and temperature `T`, at distance `r_pt` from the star (all
         arrays of the same length). Synchrotron only where a non-thermal
         electron population `k0e`, `B_avg` is given (the hot layers).
+        Dust emission (``dust_layer``) only in the forward-shock layers.
         Returns (H-alpha, [OIII], free-free, free-free [mJy], synchrotron,
-        synchrotron [mJy])."""
+        synchrotron [mJy], dust [erg s^-1 cm^-3 Hz^-1 sr^-1])."""
         # Ionization fractions: full ionization inside the Stromgren
         # sphere, CIE at the layer temperature outside it.
         ion_H = np.ones_like(r_pt)
@@ -811,7 +870,15 @@ def los_projection_vectorized(
             j_syn, j_syn_mJy = nu_emissivity_sync(k0e, B_avg, p_inj, nu_ff)
         else:
             j_syn = j_syn_mJy = np.zeros_like(r_pt)
-        return e_Ha, e_OIII, j_ff, j_ff_mJy, j_syn, j_syn_mJy
+        if dust and dust_layer:
+            # fully ionized gas: one electron per two particles, scaled by the
+            # ionization fraction
+            j_dust = dust_emissivity(
+                n, 0.5 * n * ion_H, T, r_pt, nu_dust, L_star, a_dust_um, f_dust_gas
+            )
+        else:
+            j_dust = np.zeros_like(r_pt)
+        return e_Ha, e_OIII, j_ff, j_ff_mJy, j_syn, j_syn_mJy, j_dust
 
     # =========================
     # 2D (rho, z) EMISSIVITY TABLE
@@ -862,9 +929,11 @@ def los_projection_vectorized(
             elif which == "rs_cold":
                 em = layer_emissivity(n_IL_RS[j], T_IL_RS[j], r_pt)
             elif which == "fs_cold":
-                em = layer_emissivity(n_IL_FS[j], T_IL_FS[j], r_pt)
+                em = layer_emissivity(n_IL_FS[j], T_IL_FS[j], r_pt, dust_layer=True)
             else:
-                em = layer_emissivity(n_post_FS[j], T_post_FS[j], r_pt, k0e_FS[j], B_FS_avg[j])
+                em = layer_emissivity(
+                    n_post_FS[j], T_post_FS[j], r_pt, k0e_FS[j], B_FS_avg[j], dust_layer=True
+                )
                 if balmer_on:
                     # Neutrals exist only outside the Stromgren sphere. The slab
                     # is at least two table cells thick (so it is sampled), never
@@ -882,10 +951,10 @@ def los_projection_vectorized(
     if stored_cells:
         occupied = np.concatenate(stored_cells)
         cell_to_row[occupied] = np.arange(occupied.size, dtype=np.int32)
-        emis = [np.concatenate([v[c] for v in stored_values]) for c in range(6)]
+        emis = [np.concatenate([v[c] for v in stored_values]) for c in range(7)]
     else:
-        emis = [np.zeros(0)] * 6
-    e_Ha, e_OIII, e_ff, e_ff_mJy, e_syn, e_syn_mJy = emis
+        emis = [np.zeros(0)] * 7
+    e_Ha, e_OIII, e_ff, e_ff_mJy, e_syn, e_syn_mJy, e_dust = emis
 
     # =========================
     # LOS INTEGRATION
@@ -905,7 +974,7 @@ def los_projection_vectorized(
     y_half = y[j0:, :].ravel()
     n_half = x_half.size
 
-    out = {k: np.zeros(n_half) for k in ("Ha", "OIII", "ff", "ff_mJy", "syn", "syn_mJy")}
+    out = {k: np.zeros(n_half) for k in ("Ha", "OIII", "ff", "ff_mJy", "syn", "syn_mJy", "dust")}
     tables = {
         "Ha": e_Ha,
         "OIII": e_OIII,
@@ -913,6 +982,7 @@ def los_projection_vectorized(
         "ff_mJy": e_ff_mJy,
         "syn": e_syn,
         "syn_mJy": e_syn_mJy,
+        "dust": e_dust,
     }
     inv_cell = 1.0 / cell
 
@@ -969,6 +1039,10 @@ def los_projection_vectorized(
         "I_syn_mJy": I_syn_mJy,
         "I_continuum_total": I_ff_total + I_syn_total,
         "I_continuum_mJy": I_ff_mJy + I_syn_mJy,
+        # Dust: surface brightness [MJy/sr] and [mJy/arcsec^2] (-> mJy/beam once
+        # convolved, like the radio maps). 1 Jy = 1e-23 erg s^-1 cm^-2 Hz^-1.
+        "I_dust_MJy_sr": unfold(out["dust"]) / 1e-17,
+        "I_dust_mJy": unfold(out["dust"]) / sr_per_arcsec2 / 1e-26,
     }
 
     return result
@@ -1018,7 +1092,7 @@ def convolution(result, x_vals_arcsec, y_vals_arcsec, fwhm_x, fwhm_y, f_ny=0.7):
         conv = gaussian_filter(image, sigma=(sigma_y_pix, sigma_x_pix), mode="constant", cval=0.0)
 
         # Convert radio map to mJy/beam
-        if key in ("I_ff_mJy", "I_syn_mJy", "I_continuum_mJy"):
+        if key in ("I_ff_mJy", "I_syn_mJy", "I_continuum_mJy", "I_dust_mJy"):
             A_beam = 2.0 * np.pi * sigma_x * sigma_y  # [arcsec^2]
             conv *= A_beam
 
