@@ -675,7 +675,7 @@ class BowShock:
         self.fig2 = plt.figure(figsize=(15, 16))
         self.fig2.suptitle("Emission Maps and Radial Profiles", fontsize=16)
 
-        map_keys = ["Halpha", "OIII", "continuum", "ff", "syn"]
+        map_keys = ["Halpha", "OIII", "continuum", "ff", "syn", "dust"]
         self.star_markers = {key: None for key in map_keys}
         self.arrows = {key: None for key in map_keys}
 
@@ -687,6 +687,7 @@ class BowShock:
         ax_cont = self.fig2.add_subplot(3, 3, 3)
         ax_ff = self.fig2.add_subplot(3, 3, 4)
         ax_syn = self.fig2.add_subplot(3, 3, 5)
+        ax_dust = self.fig2.add_subplot(3, 3, 6)
 
         # Contour levels
         self.contours = {key: None for key in map_keys}
@@ -694,13 +695,14 @@ class BowShock:
         # Bottom row: radial profiles
         ax_radial_profiles = self.fig2.add_subplot(3, 3, (7, 9))
 
-        map_axes = [ax_Halpha, ax_OIII, ax_cont, ax_ff, ax_syn]
+        map_axes = [ax_Halpha, ax_OIII, ax_cont, ax_ff, ax_syn, ax_dust]
         map_titles = [
             r"H$\alpha$",
             "[O III]",
             "Free-free + synchrotron",
             "Free-free",
             "Synchrotron",
+            f"Dust ({self.dust_lambda_um:g} \u03bcm)",
         ]
 
         # Configure map axes
@@ -983,7 +985,9 @@ class BowShock:
             x_star = 0.0
             y_star = 0.0
 
-            data_list = [I_Halpha, I_OIII, I_continuum, I_ff, I_syn]
+            I_dust = sanitize_log_data(maps["I_dust_MJy_sr"])
+
+            data_list = [I_Halpha, I_OIII, I_continuum, I_ff, I_syn, I_dust]
             keys = self.fig2_axes["map_keys"]
 
             for i, (key, I_data) in enumerate(zip(keys, data_list)):
