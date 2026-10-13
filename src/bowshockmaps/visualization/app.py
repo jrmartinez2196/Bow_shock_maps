@@ -96,6 +96,12 @@ class BowShock:
         # Magnetic field
         self.f_B = self.params.get("f_B", 0.1)
 
+        # Balmer-dominated H-alpha of the forward shock (neutral ISM outside
+        # the Stromgren sphere): photons per neutral H, and pre-shock
+        # ionization fraction of the ISM
+        self.balmer_eta = self.params.get("balmer_eta", 0.3)
+        self.x_ion_ism = self.params.get("x_ion_ism", 0.08)
+
         logger.info(f"Loaded parameters for {source_name}")
         logger.info(f"  Mdot = {self.Mdot_msun:.2e} Msun/yr = {self.Mdot:.2e} g/s")
         logger.info(f"  Vw = {self.Vw/1e5:.1f} km/s")
@@ -538,6 +544,8 @@ class BowShock:
             p_inj=self.p_inj,
             f_B=self.f_B,
             R_stromgren=R_str,
+            balmer_eta=self.balmer_eta,
+            x_ion_ism=self.x_ion_ism,
             nu_ff=self.nu_ff,
             max_pixels=self.max_pixels,
             accuracy=self.accuracy,

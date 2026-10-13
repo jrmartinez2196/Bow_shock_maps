@@ -4,6 +4,10 @@ from scipy.special import gamma
 
 from bowshockmaps.constants import Rayleigh, c, h, kB, me, mec2, qe, sr_per_arcsec2
 
+# Hydrogen ionization potential [eV] and Boltzmann constant [eV/K]
+_CHI_H_EV = 13.6
+_KB_EV = 8.617333e-5
+
 
 def emissivity_Halpha(n, T, ion_H=1.0):
     """
@@ -168,3 +172,45 @@ def cte_syn(p):
     a_den = 8.0 * np.sqrt(np.pi) * (p + 1.0) * gamma((p + 7.0) / 4.0)
 
     return a_num / a_den
+
+
+def balmer_photon_flux(n_ism, x_ion, v_perp, eta=0.3):
+    """Photon flux of the Balmer-dominated emission of a shock [photons cm^-2 s^-1].
+
+    The neutral hydrogen of a partially ionized ISM crosses the forward
+    shock without being heated (the shock is collisionless for the ions;
+    the neutrals only feel it through charge exchange and collisions
+    afterwards). Each neutral is excited and ionized behind the shock, and
+    on average emits ``eta`` H-alpha photons before it is ionized
+    (~0.2-0.5 for shock speeds of 100-200 km/s; Chevalier & Raymond 1978,
+    Ghavamian et al. 2001). The flux is therefore proportional to the
+    neutral flux through the shock, n_HI * v_perp, and not to n^2.
+
+    Parameters
+    ----------
+    n_ism : float or array
+        ISM hydrogen density [cm^-3].
+    x_ion : float
+        Ionization fraction of the pre-shock ISM (0-1).
+    v_perp : float or array
+        Pre-shock velocity normal to the shock [cm/s].
+    eta : float
+        H-alpha photons per neutral hydrogen crossing the shock.
+    """
+    n_HI = np.asarray(n_ism, dtype=float) * (1.0 - x_ion)
+    return eta * n_HI * np.maximum(np.asarray(v_perp, dtype=float), 0.0)
+
+
+def balmer_ionization_length(n_e, T, v_perp):
+    """Distance behind the shock in which a neutral is ionized [cm].
+
+    Collisional ionization of H by electrons (Voronov 1997 fit) at the
+    post-shock temperature `T`, with the post-shock flow speed v_perp / 4
+    (strong shock). The H-alpha photons of ``balmer_photon_flux`` are
+    emitted within this length.
+    """
+    T = np.maximum(np.asarray(T, dtype=float), 1e4)
+    U = _CHI_H_EV / (_KB_EV * T)
+    q_ion = 2.91e-8 * U**0.39 / (0.232 + U) * np.exp(-U)  # cm^3 s^-1
+    t_ion = 1.0 / (np.maximum(np.asarray(n_e, dtype=float), 1e-30) * q_ion)
+    return 0.25 * np.maximum(np.asarray(v_perp, dtype=float), 0.0) * t_ion

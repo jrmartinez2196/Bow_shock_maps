@@ -14,6 +14,8 @@ from bowshockmaps.physics.bow_shock_surface import integrate_r_theta_christie
 from bowshockmaps.physics.ionization import IonizationTable
 from bowshockmaps.physics.normalization import k0_e, k0_p
 from bowshockmaps.physics.radiation import (
+    balmer_ionization_length,
+    balmer_photon_flux,
     emissivity_Halpha,
     emissivity_OIII,
     nu_emissivity_freefree,
@@ -308,6 +310,8 @@ def make_projection_maps(
     p_inj=2.5,
     f_B=0.1,
     R_stromgren=3.086e17,
+    balmer_eta=0.3,
+    x_ion_ism=0.08,
     nu_ff=2e6 * 1e9,
     distance=224.0,
     convolve=True,
@@ -369,7 +373,14 @@ def make_projection_maps(
     wind_T_fixed : float or None
         Fixed wind temperature for 'fixed' regime [K]
     R_stromgren : float
-        Stromgren radius [cm]
+        Stromgren radius [cm]. Inside it the ISM is photoionized (no neutrals,
+        so no Balmer emission); outside, a fraction ``1 - x_ion_ism`` of the
+        ISM hydrogen is neutral.
+    balmer_eta : float
+        H-alpha photons per neutral hydrogen crossing the forward shock
+        (Balmer-dominated emission); 0 switches it off.
+    x_ion_ism : float
+        Ionization fraction of the pre-shock ISM outside the Stromgren sphere.
     nu_ff : float
         Frequency for free-free emission [Hz]
     distance : float
@@ -571,6 +582,9 @@ def make_projection_maps(
         zmax=zmax,
         nz=nz,
         R_stromgren=R_stromgren,
+        n_ism=n_ism,
+        balmer_eta=balmer_eta,
+        x_ion_ism=x_ion_ism,
         f_NTp=f_NTp,
         f_NTe=f_NTe,
         p_inj=p_inj,
@@ -602,6 +616,9 @@ def los_projection_vectorized(
     zmax=5e15,
     nz=500,
     R_stromgren=3.086e17,
+    n_ism=None,
+    balmer_eta=0.3,
+    x_ion_ism=0.08,
     f_NTp=0.1,
     f_NTe=0.01,
     p_inj=2.5,
@@ -654,7 +671,16 @@ def los_projection_vectorized(
         Number of LOS integration steps (over [-zmax, zmax]; only those
         that can reach the shell are used)
     R_stromgren : float
-        Stromgren radius [cm]
+        Stromgren radius [cm]. Inside it the ISM is photoionized (no neutrals,
+        so no Balmer emission); outside, a fraction ``1 - x_ion_ism`` of the
+        ISM hydrogen is neutral.
+    n_ism : float
+        ISM density [cm^-3], for the Balmer emission of the forward shock.
+    balmer_eta : float
+        H-alpha photons per neutral hydrogen crossing the forward shock
+        (Balmer-dominated emission); 0 switches it off.
+    x_ion_ism : float
+        Ionization fraction of the pre-shock ISM outside the Stromgren sphere.
     nu_ff : float
         Frequency for free-free emission [Hz]
 
@@ -744,6 +770,16 @@ def los_projection_vectorized(
     logger.info(f"Apex magnetic field: B_RS = {B_RS_apex[0]*1e6:.1f} muG")
     logger.info(f"Apex magnetic field: B_FS = {B_FS_apex[0]*1e6:.1f} muG")
 
+    # Balmer-dominated H-alpha of the forward shock: the neutral ISM crosses
+    # the shock and is excited / ionized in a thin slab behind it, at the
+    # outer edge of the FS hot layer. Photon column [cm^-2 s^-1] and slab
+    # thickness [cm] along the shell; see `balmer_photon_flux`.
+    balmer_on = balmer_eta > 0.0 and n_ism is not None
+    if balmer_on:
+        v_perp_FS = fs_props["v_perp"](theta_tab)
+        N_balmer = balmer_photon_flux(n_ism, x_ion_ism, v_perp_FS, balmer_eta)
+        l_balmer = balmer_ionization_length(n_post_FS, T_post_FS, v_perp_FS)
+
     def layer_emissivity(n, T, r_pt, k0e=None, B_avg=None):
         """Emissivities (per unit length) of gas in a layer with density
         `n` and temperature `T`, at distance `r_pt` from the star (all
@@ -829,6 +865,17 @@ def los_projection_vectorized(
                 em = layer_emissivity(n_IL_FS[j], T_IL_FS[j], r_pt)
             else:
                 em = layer_emissivity(n_post_FS[j], T_post_FS[j], r_pt, k0e_FS[j], B_FS_avg[j])
+                if balmer_on:
+                    # Neutrals exist only outside the Stromgren sphere. The slab
+                    # is at least two table cells thick (so it is sampled), never
+                    # thicker than the layer; the photon column is conserved.
+                    h_layer = shell.d4[j] - shell.d3[j]
+                    slab = np.minimum(np.maximum(l_balmer[j], 2.0 * cell), h_layer)
+                    in_slab = (d[cells] >= shell.d4[j] - slab) & (r_pt > R_stromgren) & (slab > 0)
+                    # 1 R = 1e6 / (4 pi) photons cm^-2 s^-1 sr^-1: an isotropic
+                    # column N gives N / 1e6 R when seen along the normal.
+                    j_balmer = np.where(in_slab, N_balmer[j] / (1e6 * np.maximum(slab, 1e-30)), 0.0)
+                    em = (em[0] + j_balmer,) + tuple(em[1:])
             stored_cells.append(k0 * n_rho + cells)
             stored_values.append(em)
 
